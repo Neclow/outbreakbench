@@ -1,0 +1,17 @@
+[workspace]
+authors = ["Neclow <neilclow24@gmail.com>"]
+channels = ["conda-forge"]
+name = "outbreakbench"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.13,<3.14"
+matplotlib = ">=3.9,<4"
+seaborn = ">=0.13,<0.14"
+scipy = ">=1.13,<1.16"
+
+[pypi-dependencies]
+covasim = { git = "https://github.com/starsimhub/covasim.git" }
