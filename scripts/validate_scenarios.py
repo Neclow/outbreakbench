@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-from scenarios import SCENARIOS, create_sim
+from outbreakbench.scenarios import SCENARIOS, create_sim
 
 
 def age_stratified_deaths(sim):

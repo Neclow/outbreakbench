@@ -15,3 +15,4 @@ scipy = ">=1.13,<1.16"
 
 [pypi-dependencies]
 covasim = { git = "https://github.com/starsimhub/covasim.git" }
+outbreakbench = { path = ".", editable = true }
