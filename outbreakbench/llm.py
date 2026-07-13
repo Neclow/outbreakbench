@@ -2,10 +2,13 @@
 LLM interface for the outbreak policy benchmark.
 
 Builds prompts from surveillance reports, parses NPI decisions from responses.
+Provides an OpenAI-compatible client wrapper for vLLM, Ollama, OpenRouter, etc.
 """
 
 import json
 import re
+
+from openai import OpenAI
 
 from outbreakbench.npis import (
     DEFAULT_POLICY,
@@ -117,6 +120,41 @@ def build_user_message(report, week_number=None):
         header = f"Week {week_number} of the epidemic. {header}"
     header += " Please review it and decide your NPI policy for the coming week."
     return f"{header}\n\n{report}"
+
+
+def make_client(base_url="http://localhost:8000/v1", model="default", temperature=0.7):
+    """Create a call_llm callable from an OpenAI-compatible endpoint.
+
+    Works with vLLM, Ollama, OpenRouter, or any OpenAI-compatible API.
+
+    Parameters
+    ----------
+    base_url : str
+        API base URL (e.g. "http://localhost:8000/v1" for vLLM).
+    model : str
+        Model name as registered on the server.
+    temperature : float
+        Sampling temperature.
+
+    Returns
+    -------
+    callable with signature call_llm(system_prompt, messages) -> str
+    """
+    client = OpenAI(base_url=base_url, api_key="unused")
+
+    def call_llm(system_prompt, messages):
+        api_messages = [{"role": "system", "content": system_prompt}]
+        api_messages.extend(messages)
+        response = client.chat.completions.create(
+            model=model,
+            messages=api_messages,
+            temperature=temperature,
+        )
+        return response.choices[0].message.content
+
+    call_llm.model = model
+    call_llm.base_url = base_url
+    return call_llm
 
 
 def parse_response(text):
