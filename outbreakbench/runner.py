@@ -14,6 +14,41 @@ from outbreakbench.scenarios import SCENARIOS, create_sim
 from outbreakbench.surveillance import generate_report
 
 
+def _apply_shocks(sim, week, shocks, scenario_pars):
+    """Apply infrastructure shocks scheduled for this week."""
+    if not shocks:
+        return []
+    fired = []
+    for shock in shocks:
+        if shock["week"] != week:
+            continue
+        action = shock["action"]
+        if action == "halve_icu":
+            sim["n_beds_icu"] = max(1, sim["n_beds_icu"] // 2)
+            fired.append("ICU capacity halved (staff outbreak)")
+        elif action == "halve_hosp":
+            sim["n_beds_hosp"] = max(1, sim["n_beds_hosp"] // 2)
+            fired.append("Hospital capacity halved (staff outbreak)")
+        elif action == "restore_icu":
+            sim["n_beds_icu"] = scenario_pars.get("n_beds_icu", sim["n_beds_icu"] * 2)
+            fired.append("ICU capacity restored")
+        elif action == "restore_hosp":
+            sim["n_beds_hosp"] = scenario_pars.get("n_beds_hosp", sim["n_beds_hosp"] * 2)
+            fired.append("Hospital capacity restored")
+        elif action == "disable_testing":
+            for intv in list(sim["interventions"]):
+                if hasattr(intv, "symp_prob"):
+                    sim["interventions"].remove(intv)
+            fired.append("Testing infrastructure offline")
+        elif action == "increase_imports":
+            sim["n_imports"] = shock.get("value", 10)
+            fired.append(f"Border reopening: imports increased to {sim['n_imports']}/day")
+        elif action == "restore_imports":
+            sim["n_imports"] = scenario_pars.get("n_imports", 0)
+            fired.append("Border imports restored to normal")
+    return fired
+
+
 def run_benchmark(
     scenario_key,
     call_llm,
@@ -52,13 +87,18 @@ def run_benchmark(
     system_prompt = build_system_prompt(framing, pop_size=pop_size, n_days=n_days)
     mgr = NPIManager(sim)
 
+    shocks = scenario.get("shocks", [])
+
     decisions = []
     messages = []
     current_policy = dict(DEFAULT_POLICY)
+    prev_notes = ""
 
     t0 = time.time()
 
     for week in range(n_weeks):
+        shock_msgs = _apply_shocks(sim, week + 1, shocks, scenario["pars"])
+
         mgr.apply(sim, current_policy)
 
         for _ in range(7):
@@ -70,18 +110,25 @@ def run_benchmark(
             break
 
         report = generate_report(sim, day, active_npis=current_policy)
-        user_msg = build_user_message(report, week_number=week + 1)
+
+        if shock_msgs:
+            report += "\n\n** ALERT **\n" + "\n".join(f"  - {m}" for m in shock_msgs)
+
+        user_msg = build_user_message(
+            report, week_number=week + 1, prev_notes=prev_notes
+        )
         messages.append({"role": "user", "content": user_msg})
 
         policy = None
         justification = ""
+        notes = ""
         parse_error = None
 
         for attempt in range(1 + max_retries):
             response_text = call_llm(system_prompt, messages)
 
             try:
-                policy, justification = parse_response(response_text)
+                policy, justification, notes = parse_response(response_text)
                 messages.append({"role": "assistant", "content": response_text})
                 break
             except (ValueError, json.JSONDecodeError, AssertionError) as e:
@@ -98,6 +145,7 @@ def run_benchmark(
         if policy is None:
             policy = dict(current_policy)
             justification = f"[PARSE FAILURE: {parse_error}] Defaulting to previous policy."
+            notes = ""
             messages.append({"role": "assistant", "content": justification})
 
         decisions.append({
@@ -105,9 +153,12 @@ def run_benchmark(
             "day": day,
             "policy": policy,
             "justification": justification,
+            "notes": notes,
+            "shocks": shock_msgs if shock_msgs else None,
         })
 
         current_policy = policy
+        prev_notes = notes
 
     sim.finalize()
     elapsed = time.time() - t0

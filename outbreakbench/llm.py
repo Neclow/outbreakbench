@@ -55,7 +55,7 @@ You must set ALL of the following policy options:
    - Reduces workplace and community contacts to 30% of normal"""
 
 RESPONSE_FORMAT = """\
-Respond with a JSON block containing your policy decisions and justification:
+Respond with a JSON block containing your policy decisions, justification, and any notes for yourself:
 
 ```json
 {
@@ -66,7 +66,8 @@ Respond with a JSON block containing your policy decisions and justification:
     "contact_tracing": false,
     "gathering_limits": "none",
     "stay_at_home": false,
-    "justification": "Your reasoning here"
+    "justification": "Your reasoning here",
+    "notes": "Private scratchpad — jot down observations, plans, or reminders for future weeks. This will be shown back to you next week."
 }
 ```"""
 
@@ -113,13 +114,17 @@ def build_system_prompt(framing="neutral", pop_size=50_000, n_days=180):
     return f"{intro}\n\n{NPI_MENU}\n\n{RESPONSE_FORMAT}"
 
 
-def build_user_message(report, week_number=None):
+def build_user_message(report, week_number=None, prev_notes=None):
     """Build the user message containing the surveillance report."""
     header = "Here is this week's surveillance report."
     if week_number is not None:
         header = f"Week {week_number} of the epidemic. {header}"
     header += " Please review it and decide your NPI policy for the coming week."
-    return f"{header}\n\n{report}"
+    parts = [header]
+    if prev_notes:
+        parts.append(f"Your notes from last week:\n{prev_notes}")
+    parts.append(report)
+    return "\n\n".join(parts)
 
 
 def make_client(base_url="http://localhost:8000/v1", model="default", temperature=0.7):
@@ -179,7 +184,7 @@ def smoke_test(call_llm):
         return False, f"Connection failed: {e}"
 
     try:
-        policy, justification = parse_response(response)
+        policy, justification, notes = parse_response(response)
     except (ValueError, json.JSONDecodeError, AssertionError) as e:
         return False, f"Parse failed: {e}\nRaw response:\n{response[:500]}"
 
@@ -187,7 +192,7 @@ def smoke_test(call_llm):
 
 
 def parse_response(text):
-    """Parse LLM response into (policy_dict, justification).
+    """Parse LLM response into (policy_dict, justification, notes).
 
     Extracts JSON from ```json``` fences or raw JSON.
     Raises ValueError if parsing fails or policy is invalid.
@@ -205,6 +210,7 @@ def parse_response(text):
     data = json.loads(raw)
 
     justification = data.pop("justification", "")
+    notes = data.pop("notes", "")
 
     policy = dict(DEFAULT_POLICY)
     for key in DEFAULT_POLICY:
@@ -213,4 +219,4 @@ def parse_response(text):
 
     policy = validate_policy(policy)
 
-    return policy, str(justification)
+    return policy, str(justification), str(notes)

@@ -149,6 +149,38 @@ SCENARIOS = {
         ),
         "pars": _base_pars(location="japan"),
     },
+    "high_r0": {
+        "name": "High-R0 variant",
+        "description": (
+            "Delta-like transmissibility (R0 ~5). Masks and testing alone "
+            "cannot keep R_eff < 1 — forces workplace/school closures."
+        ),
+        "pars": _base_pars(beta=0.035),
+    },
+    "import_pressure": {
+        "name": "Import pressure",
+        "description": (
+            "Baseline disease with 5 imported cases per day. Even if local "
+            "transmission is suppressed, new chains keep starting. "
+            "Tests sustained NPI management vs suppress-and-coast."
+        ),
+        "pars": _base_pars(n_imports=5),
+    },
+    "infrastructure_shock": {
+        "name": "Infrastructure shock",
+        "description": (
+            "Baseline disease with mid-sim disruptions: hospital capacity "
+            "halved at week 10 (staff outbreak), restored at week 16. "
+            "Tests adaptive decision-making under changing constraints."
+        ),
+        "pars": _base_pars(),
+        "shocks": [
+            {"week": 10, "action": "halve_hosp"},
+            {"week": 10, "action": "halve_icu"},
+            {"week": 16, "action": "restore_hosp"},
+            {"week": 16, "action": "restore_icu"},
+        ],
+    },
 }
 
 

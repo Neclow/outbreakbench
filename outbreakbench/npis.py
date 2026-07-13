@@ -27,7 +27,7 @@ _GATHERING_BETA = {"ban_large": 0.5, "ban_all": 0.2, "none": 1.0}
 _MASK_BETA = 0.7
 _TESTING_SYMP_PROB = 0.3
 _TESTING_BASELINE_PROB = 0.05
-_TRACE_PROBS = {"h": 1.0, "s": 0.5, "w": 0.5, "c": 0.2}
+_TRACE_PROBS = {"h": 1.0, "s": 0.8, "w": 0.5, "c": 0.05}
 _TRACE_TIME = {"h": 1, "s": 2, "w": 2, "c": 5}
 _STAY_AT_HOME_FRACTION = 0.3
 

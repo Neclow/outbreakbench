@@ -213,6 +213,56 @@ def npi_stringency(policy):
     return score
 
 
+_CLOSURE_FRAC = {"open": 1.0, "partial": 0.5, "full": 0.0}
+
+
+def economic_disruption(policy):
+    """Compute weekly economic disruption from a policy dict.
+
+    Returns (work_disruption, school_disruption) each in [0, 1].
+    0 = no disruption, 1 = fully closed.
+    """
+    work_frac = _CLOSURE_FRAC[policy["workplaces"]]
+    if policy["stay_at_home"]:
+        work_frac = min(work_frac, 0.3)
+    school_frac = _CLOSURE_FRAC[policy["schools"]]
+    return 1.0 - work_frac, 1.0 - school_frac
+
+
+def run_economic_cost(decisions):
+    """Total economic cost across all weeks of a run.
+
+    Returns dict with work_weeks_lost, school_weeks_lost, and a combined
+    disruption index (weighted: 70% work, 30% school).
+    """
+    work_total = 0.0
+    school_total = 0.0
+    for d in decisions:
+        w, s = economic_disruption(d["policy"])
+        work_total += w
+        school_total += s
+    n = len(decisions)
+    return {
+        "work_weeks_lost": work_total,
+        "school_weeks_lost": school_total,
+        "work_pct": 100 * work_total / n if n else 0,
+        "school_pct": 100 * school_total / n if n else 0,
+        "disruption_index": 0.7 * work_total + 0.3 * school_total,
+    }
+
+
+def baseline_economic_cost(policy_label, n_weeks=25):
+    """Economic cost for a fixed-policy baseline."""
+    if policy_label == "no_intervention":
+        return {"work_weeks_lost": 0.0, "school_weeks_lost": 0.0, "disruption_index": 0.0}
+    # full lockdown: workplaces full + stay_at_home → frac=0.0, schools full → frac=0.0
+    return {
+        "work_weeks_lost": float(n_weeks),
+        "school_weeks_lost": float(n_weeks),
+        "disruption_index": 0.7 * n_weeks + 0.3 * n_weeks,
+    }
+
+
 def load_baselines(output_dir="outputs/runs"):
     path = os.path.join(output_dir, "baselines.json")
     if not os.path.exists(path):
@@ -222,69 +272,70 @@ def load_baselines(output_dir="outputs/runs"):
 
 
 def plot_policy_frontier(results, baselines, model_name):
-    """Cost-effectiveness plane: deaths vs NPI stringency, with baselines."""
+    """Cost-effectiveness plane: deaths vs economic disruption, with baselines."""
     scenarios = sorted(set(r["scenario"] for r in results))
     framing_colors = {"neutral": "#4C72B0", "public_health": "#DD8452", "economic": "#55A868"}
     framing_markers = {"neutral": "o", "public_health": "s", "economic": "D"}
+    framing_labels = {"neutral": "Neutral", "public_health": "Public health", "economic": "Economic"}
 
     n_cols = 3
     n_rows = (len(scenarios) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5 * n_rows))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5.5 * n_rows))
     axes = axes.flatten()
 
     for idx, scenario in enumerate(scenarios):
         ax = axes[idx]
 
-        # Baselines
         no_int = [b for b in baselines if b["scenario"] == scenario and b["policy"] == "no_intervention"]
         full_lock = [b for b in baselines if b["scenario"] == scenario and b["policy"] == "full_lockdown"]
 
         if no_int:
+            bl_cost = baseline_economic_cost("no_intervention")
             ax.scatter(
-                [0] * len(no_int),
+                [bl_cost["work_weeks_lost"]] * len(no_int),
                 [b["cum_deaths"] for b in no_int],
-                marker="X", s=100, c="gray", zorder=5, label="No intervention",
+                marker="X", s=120, c="gray", zorder=5, edgecolors="black",
+                linewidths=0.5, label="No intervention",
             )
         if full_lock:
-            n_weeks = 25
+            bl_cost = baseline_economic_cost("full_lockdown")
             ax.scatter(
-                [7 * n_weeks] * len(full_lock),
+                [bl_cost["work_weeks_lost"]] * len(full_lock),
                 [b["cum_deaths"] for b in full_lock],
-                marker="X", s=100, c="black", zorder=5, label="Full lockdown",
+                marker="X", s=120, c="black", zorder=5, label="Full lockdown",
             )
 
-        # LLM runs
-        for framing in sorted(framing_colors.keys()):
+        for framing in ["economic", "neutral", "public_health"]:
             subset = [
                 r for r in results
                 if r["scenario"] == scenario and r["framing"] == framing
             ]
             if not subset:
                 continue
-            stringencies = []
+            costs = []
             deaths = []
             for r in subset:
-                total = sum(npi_stringency(d["policy"]) for d in r["decisions"])
-                stringencies.append(total)
+                econ = run_economic_cost(r["decisions"])
+                costs.append(econ["work_weeks_lost"])
                 deaths.append(r["final_results"]["cum_deaths"])
             ax.scatter(
-                stringencies, deaths,
+                costs, deaths,
                 marker=framing_markers[framing], s=60,
                 c=framing_colors[framing], alpha=0.8,
-                label=framing, zorder=4,
+                label=framing_labels[framing], zorder=4,
             )
 
-        ax.set_title(scenario.replace("_", " ").title(), fontsize=11)
-        ax.set_xlabel("Cumulative NPI Stringency\n(sum of weekly scores)")
-        ax.set_ylabel("Cumulative Deaths")
-        ax.legend(fontsize=7, loc="upper right")
+        ax.set_title(scenario.replace("_", " ").title(), fontsize=12, fontweight="bold")
+        ax.set_xlabel("Work-weeks lost to closures")
+        ax.set_ylabel("Cumulative deaths")
+        ax.legend(fontsize=7, loc="best")
 
     for idx in range(len(scenarios), len(axes)):
         axes[idx].set_visible(False)
 
     fig.suptitle(
-        f"{model_name}: Policy Frontier — Deaths vs Intervention Stringency",
-        fontsize=14,
+        f"{model_name}: Health–Economy Tradeoff",
+        fontsize=14, fontweight="bold",
     )
     plt.tight_layout()
     return fig

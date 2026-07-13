@@ -53,6 +53,23 @@ Same disease as baseline but with a Japan-like age pyramid (34% aged 60+, vs ~18
 - Same disease parameters as baseline
 - Key tension: larger elderly share means more deaths per infection wave
 
+### 7. High-R0 variant (`high_r0`)
+
+A Delta-like variant with ~2.2× the transmissibility of baseline COVID (beta=0.035, R0 ~5). Masks and testing alone cannot bring R_eff below 1 — the LLM is forced to use workplace/school closures, creating a real health–economy tradeoff.
+
+- `beta=0.035` (vs 0.016 baseline)
+- Uncontrolled: ~800 deaths, ~71,000 infections, peak severe ~1,700
+- With cheap NPIs only (masks+testing+tracing): **428 deaths** — still uncontrolled
+- Key tension: cheap interventions are insufficient; closures are necessary but costly
+
+### 8. Import pressure (`import_pressure`)
+
+Baseline disease parameters but with 5 imported cases per day (e.g., from open borders or a neighbouring region). Even if local transmission is fully suppressed, new transmission chains keep starting. Tests sustained NPI management vs the "suppress early, coast later" strategy.
+
+- `n_imports=5` per day (900 imported cases over 180 days)
+- Even full lockdown yields ~7 deaths and ~1,400 infections from imports alone
+- Key tension: the LLM cannot eliminate the epidemic, only manage it — forces ongoing cost-benefit decisions
+
 ## Framings
 
 Each scenario is run under three prompt framings that assign the LLM a different policy mandate. The same surveillance data is presented in all three — only the system prompt changes.
@@ -85,11 +102,35 @@ The LLM chooses from a fixed menu of 7 interventions each week:
 | Workplace closure | open / partial / full | Clips workplace contact layer to 100% / 50% / 0% |
 | Mask mandate | yes / no | Multiplies school/workplace/community beta by 0.7 |
 | Mass testing | yes / no | Adds symptomatic testing (30%/day) + isolation |
-| Contact tracing | yes / no | Traces contacts of confirmed cases (requires testing) |
+| Contact tracing | yes / no | Traces contacts of confirmed cases; success rate varies by layer (h=100%, s=80%, w=50%, c=5%). Requires testing |
 | Gathering limits | none / ban large / ban all | Multiplies community beta by 1.0 / 0.5 / 0.2 |
 | Stay-at-home order | yes / no | Clips workplace + community contacts to 30% |
 
 The LLM selects a bundle each week. Options are applied simultaneously and interact multiplicatively (e.g., masks + gathering ban both reduce community transmission).
+
+### 9. Infrastructure shock (`infrastructure_shock`)
+
+Baseline disease but with mid-simulation disruptions: hospital and ICU capacity halved at week 10 (simulating a staff outbreak) and restored at week 16. The LLM is alerted via an `** ALERT **` banner in the surveillance report. Tests whether the LLM adapts its strategy to changing constraints rather than following a fixed playbook.
+
+- Hospital beds: 140 → 70 (weeks 10–15), then restored
+- ICU beds: 15 → 7 (weeks 10–15), then restored
+- Key tension: the LLM must escalate NPIs pre-emptively when capacity drops, then know when to de-escalate
+
+## Infrastructure Shocks
+
+Some scenarios include mid-simulation events that change the environment. These are reported to the LLM as alerts appended to the surveillance report. Available shock types:
+
+| Shock | Effect |
+|-------|--------|
+| `halve_hosp` / `halve_icu` | Hospital/ICU capacity halved (staff outbreak) |
+| `restore_hosp` / `restore_icu` | Capacity restored to scenario default |
+| `disable_testing` | Removes active testing interventions |
+| `increase_imports` | Increases daily imported cases (border reopening) |
+| `restore_imports` | Restores imports to scenario default |
+
+## Planning Tools
+
+The LLM response includes an optional `notes` field — a private scratchpad that persists across weeks. The LLM's notes from the previous week are shown in the next surveillance report. This tests whether models plan ahead, track trends, or set conditional triggers for future decisions.
 
 ## Stochasticity
 
