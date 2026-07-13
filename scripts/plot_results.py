@@ -198,12 +198,105 @@ def plot_weekly_decisions(results, model_name, scenario="baseline"):
     return fig
 
 
+def npi_stringency(policy):
+    score = 0
+    if policy["schools"] == "partial": score += 0.5
+    if policy["schools"] == "full": score += 1
+    if policy["workplaces"] == "partial": score += 0.5
+    if policy["workplaces"] == "full": score += 1
+    if policy["masks"]: score += 1
+    if policy["mass_testing"]: score += 1
+    if policy["contact_tracing"]: score += 1
+    if policy["gathering_limits"] == "ban_large": score += 0.5
+    if policy["gathering_limits"] == "ban_all": score += 1
+    if policy["stay_at_home"]: score += 1
+    return score
+
+
+def load_baselines(output_dir="outputs/runs"):
+    path = os.path.join(output_dir, "baselines.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def plot_policy_frontier(results, baselines, model_name):
+    """Cost-effectiveness plane: deaths vs NPI stringency, with baselines."""
+    scenarios = sorted(set(r["scenario"] for r in results))
+    framing_colors = {"neutral": "#4C72B0", "public_health": "#DD8452", "economic": "#55A868"}
+    framing_markers = {"neutral": "o", "public_health": "s", "economic": "D"}
+
+    n_cols = 3
+    n_rows = (len(scenarios) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5 * n_rows))
+    axes = axes.flatten()
+
+    for idx, scenario in enumerate(scenarios):
+        ax = axes[idx]
+
+        # Baselines
+        no_int = [b for b in baselines if b["scenario"] == scenario and b["policy"] == "no_intervention"]
+        full_lock = [b for b in baselines if b["scenario"] == scenario and b["policy"] == "full_lockdown"]
+
+        if no_int:
+            ax.scatter(
+                [0] * len(no_int),
+                [b["cum_deaths"] for b in no_int],
+                marker="X", s=100, c="gray", zorder=5, label="No intervention",
+            )
+        if full_lock:
+            n_weeks = 25
+            ax.scatter(
+                [7 * n_weeks] * len(full_lock),
+                [b["cum_deaths"] for b in full_lock],
+                marker="X", s=100, c="black", zorder=5, label="Full lockdown",
+            )
+
+        # LLM runs
+        for framing in sorted(framing_colors.keys()):
+            subset = [
+                r for r in results
+                if r["scenario"] == scenario and r["framing"] == framing
+            ]
+            if not subset:
+                continue
+            stringencies = []
+            deaths = []
+            for r in subset:
+                total = sum(npi_stringency(d["policy"]) for d in r["decisions"])
+                stringencies.append(total)
+                deaths.append(r["final_results"]["cum_deaths"])
+            ax.scatter(
+                stringencies, deaths,
+                marker=framing_markers[framing], s=60,
+                c=framing_colors[framing], alpha=0.8,
+                label=framing, zorder=4,
+            )
+
+        ax.set_title(scenario.replace("_", " ").title(), fontsize=11)
+        ax.set_xlabel("Cumulative NPI Stringency\n(sum of weekly scores)")
+        ax.set_ylabel("Cumulative Deaths")
+        ax.legend(fontsize=7, loc="upper right")
+
+    for idx in range(len(scenarios), len(axes)):
+        axes[idx].set_visible(False)
+
+    fig.suptitle(
+        f"{model_name}: Policy Frontier — Deaths vs Intervention Stringency",
+        fontsize=14,
+    )
+    plt.tight_layout()
+    return fig
+
+
 def main():
     results = load_results()
     if not results:
         print("No results found in outputs/runs/")
         return
 
+    baselines = load_baselines()
     models = sorted(set(r.get("model", "unknown") for r in results))
     os.makedirs("outputs", exist_ok=True)
 
@@ -222,6 +315,13 @@ def main():
         fig.savefig(path, dpi=150)
         plt.close(fig)
         print(f"  Saved {path}")
+
+        if baselines:
+            fig = plot_policy_frontier(model_results, baselines, model_name)
+            path = f"outputs/{model_name}_frontier.png"
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            print(f"  Saved {path}")
 
         scenarios = sorted(set(r["scenario"] for r in model_results))
         for scenario in scenarios:
