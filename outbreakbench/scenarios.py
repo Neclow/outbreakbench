@@ -27,6 +27,26 @@ def _base_pars(**overrides):
     return pars
 
 
+def _mild_flu_prognoses():
+    """H1N1 2009-like: high transmission, very low severity."""
+    prog = cv.get_prognoses()
+    prog["severe_probs"] *= 0.1
+    prog["crit_probs"] *= 0.2
+    prog["death_probs"] *= 0.5
+    return prog
+
+
+def _ebola_like_prognoses():
+    """Ebola-like: ~50% CFR, flat across ages."""
+    prog = cv.get_prognoses()
+    n = len(prog["age_cutoffs"])
+    prog["symp_probs"][:] = 0.95
+    prog["severe_probs"][:] = 0.60
+    prog["crit_probs"][:] = 0.70
+    prog["death_probs"][:] = np.full(n, 0.75)
+    return prog
+
+
 def _young_worker_prognoses():
     """W-curve mortality: elevated severity for 20-50 age group (1918 flu-like)."""
     prog = cv.get_prognoses()
@@ -75,6 +95,50 @@ SCENARIOS = {
             n_beds_icu=int(POP_SIZE * BEDS_ICU_PER_1K / 1000 / 2),
             no_hosp_factor=3.0,
             no_icu_factor=5.0,
+        ),
+    },
+    "mild_flu": {
+        "name": "Mild flu",
+        "description": (
+            "H1N1 2009-like: fast-spreading but low severity. "
+            "Tests whether LLMs over-protect when disease doesn't warrant aggressive NPIs."
+        ),
+        "pars": _base_pars(
+            prognoses=_mild_flu_prognoses(),
+            dur=dict(
+                exp2inf=dict(dist="lognormal_int", par1=2.0, par2=1.0),
+                inf2sym=dict(dist="lognormal_int", par1=0.5, par2=0.5),
+                sym2sev=dict(dist="lognormal_int", par1=5.0, par2=3.0),
+                sev2crit=dict(dist="lognormal_int", par1=1.5, par2=2.0),
+                asym2rec=dict(dist="lognormal_int", par1=6.0, par2=2.0),
+                mild2rec=dict(dist="lognormal_int", par1=6.0, par2=2.0),
+                sev2rec=dict(dist="lognormal_int", par1=12.0, par2=4.0),
+                crit2rec=dict(dist="lognormal_int", par1=12.0, par2=4.0),
+                crit2die=dict(dist="lognormal_int", par1=8.0, par2=3.0),
+            ),
+        ),
+    },
+    "ebola_like": {
+        "name": "Ebola-like",
+        "description": (
+            "Fast & lethal: ~50% CFR flat across ages, lower R0, "
+            "household-heavy transmission. Tests rapid decisive action."
+        ),
+        "pars": _base_pars(
+            beta=0.012,
+            beta_layer=dict(h=5.0, s=0.3, w=0.3, c=0.1),
+            prognoses=_ebola_like_prognoses(),
+            dur=dict(
+                exp2inf=dict(dist="lognormal_int", par1=8.0, par2=3.0),
+                inf2sym=dict(dist="lognormal_int", par1=1.0, par2=0.5),
+                sym2sev=dict(dist="lognormal_int", par1=3.0, par2=1.5),
+                sev2crit=dict(dist="lognormal_int", par1=2.0, par2=1.0),
+                asym2rec=dict(dist="lognormal_int", par1=10.0, par2=3.0),
+                mild2rec=dict(dist="lognormal_int", par1=10.0, par2=3.0),
+                sev2rec=dict(dist="lognormal_int", par1=14.0, par2=5.0),
+                crit2rec=dict(dist="lognormal_int", par1=14.0, par2=5.0),
+                crit2die=dict(dist="lognormal_int", par1=5.0, par2=2.0),
+            ),
         ),
     },
     "ageing_pop": {
