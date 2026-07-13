@@ -157,6 +157,35 @@ def make_client(base_url="http://localhost:8000/v1", model="default", temperatur
     return call_llm
 
 
+def smoke_test(call_llm):
+    """Quick check that the LLM endpoint is reachable and returns valid JSON policy.
+
+    Returns (True, msg) on success, (False, msg) on failure.
+    """
+    test_report = (
+        "HEADLINE SUMMARY\n"
+        "  New infections this week:        500\n"
+        "  New deaths this week:              5\n"
+        "  Currently infectious:            300\n"
+        "  Hospital beds: 50 / 140 occupied (35.7% utilisation)\n"
+        "  ICU beds: 5 / 15 occupied (33.3% utilisation)"
+    )
+    system_prompt = build_system_prompt("neutral")
+    messages = [{"role": "user", "content": build_user_message(test_report, week_number=1)}]
+
+    try:
+        response = call_llm(system_prompt, messages)
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+    try:
+        policy, justification = parse_response(response)
+    except (ValueError, json.JSONDecodeError, AssertionError) as e:
+        return False, f"Parse failed: {e}\nRaw response:\n{response[:500]}"
+
+    return True, f"OK — policy={policy}, justification={justification[:80]}"
+
+
 def parse_response(text):
     """Parse LLM response into (policy_dict, justification).
 

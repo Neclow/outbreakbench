@@ -1,46 +1,65 @@
 """
-Batch runner: sweep models × scenarios × framings × seeds.
+Batch runner: sweep models x scenarios x framings x seeds.
 
 Usage:
+    # Ollama (default)
     pixi run python scripts/run_benchmark.py \
-        --model nemotron http://localhost:8000/v1 nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-        --model qwen http://localhost:8001/v1 Qwen/Qwen3.6-35B-A3B
+        --model nemotron nemotron-3-nano:30b \
+        --model qwen qwen3.6:35b-a3b
+
+    # vLLM
+    pixi run python scripts/run_benchmark.py \
+        --model nemotron nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+            --base-url http://localhost:8000/v1 \
+        --model qwen Qwen/Qwen3.6-35B-A3B \
+            --base-url http://localhost:8001/v1
 
     # Subset of scenarios/framings
     pixi run python scripts/run_benchmark.py \
-        --model nemotron http://localhost:8000/v1 nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+        --model nemotron nemotron-3-nano:30b \
         --scenarios baseline ebola_like \
         --framings neutral economic \
         --seeds 3
 
-    # Dry run to see what would be executed
+    # Dry run / smoke test only
     pixi run python scripts/run_benchmark.py \
-        --model nemotron http://localhost:8000/v1 nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+        --model nemotron nemotron-3-nano:30b \
         --dry-run
+
+    pixi run python scripts/run_benchmark.py \
+        --model nemotron nemotron-3-nano:30b \
+        --smoke-test
 """
 
 import argparse
 import json
 import os
+import sys
 import time
 import traceback
 
-from outbreakbench.llm import make_client
+from outbreakbench.llm import make_client, smoke_test
 from outbreakbench.runner import run_benchmark
 from outbreakbench.scenarios import SCENARIOS
 
 ALL_FRAMINGS = ["neutral", "public_health", "economic"]
+DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run outbreak policy benchmark")
     parser.add_argument(
         "--model",
-        nargs=3,
+        nargs=2,
         action="append",
-        metavar=("NAME", "BASE_URL", "MODEL_ID"),
+        metavar=("NAME", "MODEL_ID"),
         required=True,
-        help="Model to benchmark (repeatable): name base_url model_id",
+        help="Model to benchmark (repeatable): name model_id",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help=f"API base URL for all models (default: {DEFAULT_BASE_URL})",
     )
     parser.add_argument(
         "--scenarios",
@@ -79,6 +98,11 @@ def parse_args():
         help="Print run plan without executing",
     )
     parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="Run smoke test for each model and exit",
+    )
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip runs whose output file already exists",
@@ -94,8 +118,38 @@ def main():
     args = parse_args()
 
     models = {}
-    for name, base_url, model_id in args.model:
-        models[name] = {"base_url": base_url, "model_id": model_id}
+    for name, model_id in args.model:
+        models[name] = {"base_url": args.base_url, "model_id": model_id}
+
+    clients = {}
+    for name, cfg in models.items():
+        clients[name] = make_client(
+            base_url=cfg["base_url"],
+            model=cfg["model_id"],
+            temperature=args.temperature,
+        )
+
+    # Smoke test: always run before benchmark, or standalone with --smoke-test
+    print("Smoke testing models...")
+    all_ok = True
+    for name in models:
+        print(f"  {name} ({models[name]['model_id']})... ", end="", flush=True)
+        ok, msg = smoke_test(clients[name])
+        if ok:
+            print(f"PASS")
+        else:
+            print(f"FAIL — {msg}")
+            all_ok = False
+
+    if args.smoke_test:
+        sys.exit(0 if all_ok else 1)
+
+    if not all_ok:
+        print("\nSome models failed smoke test. Aborting.")
+        print("Check that your server is running and the model is loaded.")
+        sys.exit(1)
+
+    print()
 
     runs = []
     for model_name in models:
@@ -118,14 +172,6 @@ def main():
             exists = " [EXISTS]" if os.path.exists(out) else ""
             print(f"  {model_name}/{name}{exists}")
         return
-
-    clients = {}
-    for name, cfg in models.items():
-        clients[name] = make_client(
-            base_url=cfg["base_url"],
-            model=cfg["model_id"],
-            temperature=args.temperature,
-        )
 
     completed = 0
     failed = 0
