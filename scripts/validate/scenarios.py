@@ -5,6 +5,7 @@ Validate scenarios: run each, print summary, save plots to outputs/.
 import time
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -55,7 +56,11 @@ def plot_all(sims):
     # 1. New infections
     ax = axes[0, 0]
     for i, k in enumerate(keys):
-        ax.plot(sims[k].results["new_infections"], label=SCENARIOS[k]["name"], color=colors[i])
+        ax.plot(
+            sims[k].results["new_infections"],
+            label=SCENARIOS[k]["name"],
+            color=colors[i],
+        )
     ax.set_title("Daily New Infections")
     ax.set_xlabel("Day")
     ax.set_ylabel("Count")
@@ -64,7 +69,9 @@ def plot_all(sims):
     # 2. New deaths
     ax = axes[0, 1]
     for i, k in enumerate(keys):
-        ax.plot(sims[k].results["new_deaths"], label=SCENARIOS[k]["name"], color=colors[i])
+        ax.plot(
+            sims[k].results["new_deaths"], label=SCENARIOS[k]["name"], color=colors[i]
+        )
     ax.set_title("Daily Deaths")
     ax.set_xlabel("Day")
     ax.set_ylabel("Count")
@@ -73,7 +80,9 @@ def plot_all(sims):
     # 3. Hospital occupancy
     ax = axes[1, 0]
     for i, k in enumerate(keys):
-        ax.plot(sims[k].results["n_severe"], label=SCENARIOS[k]["name"], color=colors[i])
+        ax.plot(
+            sims[k].results["n_severe"], label=SCENARIOS[k]["name"], color=colors[i]
+        )
     ax.set_title("Hospital Occupancy (Severe Cases)")
     ax.set_xlabel("Day")
     ax.set_ylabel("Count")

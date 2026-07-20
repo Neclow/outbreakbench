@@ -1,0 +1,2 @@
+nemotron-3-nano:30b
+qwen3:14b

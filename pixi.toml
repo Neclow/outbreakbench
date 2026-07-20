@@ -6,6 +6,18 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+# Validation
+validate-npis = "python scripts/validate/npis.py"
+validate-scenarios = "python scripts/validate/scenarios.py"
+validate-surveillance = "python scripts/validate/surveillance.py"
+# Running
+smoke = "python scripts/run/benchmark.py --model nemotron-3-nano:30b --model qwen3:14b --smoke-test"
+benchmark = "python scripts/run/benchmark.py --skip-existing"
+baselines = "python scripts/run/baselines.py"
+sweep = "bash scripts/run/sweep.sh"
+# Analysis
+analyze = "python scripts/analyze/llm_decisions.py"
+plot = "python scripts/analyze/sim_outcomes.py"
 
 [dependencies]
 python = ">=3.13,<3.14"

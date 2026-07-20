@@ -6,6 +6,7 @@ Runs baseline scenario with different NPI policies and compares outcomes.
 import time
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np

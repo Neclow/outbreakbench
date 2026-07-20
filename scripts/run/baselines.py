@@ -6,6 +6,7 @@ These serve as reference points on the cost-effectiveness plane.
 import json
 import os
 
+from outbreakbench.metrics import npi_stringency
 from outbreakbench.npis import DEFAULT_POLICY, NPIManager
 from outbreakbench.scenarios import SCENARIOS, create_sim
 
@@ -21,20 +22,6 @@ FULL_LOCKDOWN = {
 
 N_SEEDS = 5
 
-
-def npi_stringency(policy):
-    score = 0
-    if policy["schools"] == "partial": score += 0.5
-    if policy["schools"] == "full": score += 1
-    if policy["workplaces"] == "partial": score += 0.5
-    if policy["workplaces"] == "full": score += 1
-    if policy["masks"]: score += 1
-    if policy["mass_testing"]: score += 1
-    if policy["contact_tracing"]: score += 1
-    if policy["gathering_limits"] == "ban_large": score += 0.5
-    if policy["gathering_limits"] == "ban_all": score += 1
-    if policy["stay_at_home"]: score += 1
-    return score
 
 
 def run_fixed_policy(scenario_key, policy, seed):
@@ -64,14 +51,19 @@ def main():
 
     for scenario_key in SCENARIOS:
         for seed in range(N_SEEDS):
-            for label, policy in [("no_intervention", DEFAULT_POLICY), ("full_lockdown", FULL_LOCKDOWN)]:
+            for label, policy in [
+                ("no_intervention", DEFAULT_POLICY),
+                ("full_lockdown", FULL_LOCKDOWN),
+            ]:
                 print(f"  {scenario_key} seed={seed} {label}...", end=" ", flush=True)
                 result = run_fixed_policy(scenario_key, policy, seed)
                 result["scenario"] = scenario_key
                 result["seed"] = seed
                 result["policy"] = label
                 baselines.append(result)
-                print(f"deaths={result['cum_deaths']}, infections={result['cum_infections']}")
+                print(
+                    f"deaths={result['cum_deaths']}, infections={result['cum_infections']}"
+                )
 
     out_dir = "outputs/runs"
     os.makedirs(out_dir, exist_ok=True)

@@ -6,24 +6,15 @@ import json
 import os
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-
-def load_results(output_dir="outputs/runs"):
-    results = []
-    for model_dir in sorted(os.listdir(output_dir)):
-        model_path = os.path.join(output_dir, model_dir)
-        if not os.path.isdir(model_path):
-            continue
-        for fname in sorted(os.listdir(model_path)):
-            if not fname.endswith(".json"):
-                continue
-            with open(os.path.join(model_path, fname)) as f:
-                results.append(json.load(f))
-    return results
+from outbreakbench._config import BURN_IN_WEEKS, DECISION_INTERVAL, N_DAYS
+from outbreakbench.io import load_runs
+from outbreakbench.metrics import npi_stringency
 
 
 def plot_outcomes_by_scenario(results, model_name):
@@ -133,33 +124,23 @@ def plot_weekly_decisions(results, model_name, scenario="baseline"):
     npi_keys = ["schools", "workplaces", "masks", "mass_testing",
                 "contact_tracing", "gathering_limits", "stay_at_home"]
 
-    def npi_score(policy):
-        score = 0
-        if policy["schools"] == "partial": score += 0.5
-        if policy["schools"] == "full": score += 1
-        if policy["workplaces"] == "partial": score += 0.5
-        if policy["workplaces"] == "full": score += 1
-        if policy["masks"]: score += 1
-        if policy["mass_testing"]: score += 1
-        if policy["contact_tracing"]: score += 1
-        if policy["gathering_limits"] == "ban_large": score += 0.5
-        if policy["gathering_limits"] == "ban_all": score += 1
-        if policy["stay_at_home"]: score += 1
-        return score
 
     framing_colors = {"neutral": "#4C72B0", "public_health": "#DD8452", "economic": "#55A868"}
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [1, 1]})
 
     ax = axes[0]
+    weeks = None
     for framing in framings:
         subset = [
             r for r in results
             if r["scenario"] == scenario and r["framing"] == framing
         ]
+        if not subset:
+            continue
         all_scores = []
         for r in subset:
-            scores = [npi_score(d["policy"]) for d in r["decisions"]]
+            scores = [npi_stringency(d["policy"]) for d in r["decisions"]]
             all_scores.append(scores)
 
         all_scores = np.array(all_scores)
@@ -172,7 +153,8 @@ def plot_weekly_decisions(results, model_name, scenario="baseline"):
     ax.set_ylabel("NPI Stringency Score (0-7)")
     ax.set_title(f"{model_name}: NPI Stringency Over Time — {scenario}")
     ax.legend()
-    ax.set_xlim(1, 25)
+    if weeks is not None and len(weeks):
+        ax.set_xlim(weeks[0], weeks[-1])
 
     ax = axes[1]
     for framing in framings:
@@ -197,20 +179,6 @@ def plot_weekly_decisions(results, model_name, scenario="baseline"):
     plt.tight_layout()
     return fig
 
-
-def npi_stringency(policy):
-    score = 0
-    if policy["schools"] == "partial": score += 0.5
-    if policy["schools"] == "full": score += 1
-    if policy["workplaces"] == "partial": score += 0.5
-    if policy["workplaces"] == "full": score += 1
-    if policy["masks"]: score += 1
-    if policy["mass_testing"]: score += 1
-    if policy["contact_tracing"]: score += 1
-    if policy["gathering_limits"] == "ban_large": score += 0.5
-    if policy["gathering_limits"] == "ban_all": score += 1
-    if policy["stay_at_home"]: score += 1
-    return score
 
 
 _CLOSURE_FRAC = {"open": 1.0, "partial": 0.5, "full": 0.0}
@@ -251,15 +219,22 @@ def run_economic_cost(decisions):
     }
 
 
-def baseline_economic_cost(policy_label, n_weeks=25):
-    """Economic cost for a fixed-policy baseline."""
+_N_DECISIONS = (N_DAYS // 7 - BURN_IN_WEEKS + DECISION_INTERVAL - 1) // DECISION_INTERVAL
+
+
+def baseline_economic_cost(policy_label, n_decisions=_N_DECISIONS):
+    """Economic cost for a fixed-policy baseline.
+
+    n_decisions must match the number of decision points in a run so that
+    units are comparable with run_economic_cost (which sums per decision).
+    """
     if policy_label == "no_intervention":
         return {"work_weeks_lost": 0.0, "school_weeks_lost": 0.0, "disruption_index": 0.0}
     # full lockdown: workplaces full + stay_at_home → frac=0.0, schools full → frac=0.0
     return {
-        "work_weeks_lost": float(n_weeks),
-        "school_weeks_lost": float(n_weeks),
-        "disruption_index": 0.7 * n_weeks + 0.3 * n_weeks,
+        "work_weeks_lost": float(n_decisions),
+        "school_weeks_lost": float(n_decisions),
+        "disruption_index": 0.7 * n_decisions + 0.3 * n_decisions,
     }
 
 
@@ -342,7 +317,7 @@ def plot_policy_frontier(results, baselines, model_name):
 
 
 def main():
-    results = load_results()
+    results = load_runs()
     if not results:
         print("No results found in outputs/runs/")
         return

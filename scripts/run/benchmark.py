@@ -3,32 +3,29 @@ Batch runner: sweep models x scenarios x framings x seeds.
 
 Usage:
     # Ollama (default)
-    pixi run python scripts/run_benchmark.py \
-        --model nemotron nemotron-3-nano:30b \
-        --model qwen qwen3.6:35b-a3b
+    pixi run benchmark \
+        --model nemotron-3-nano:30b \
+        --model qwen3:14b
 
     # vLLM
-    pixi run python scripts/run_benchmark.py \
-        --model nemotron nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
-            --base-url http://localhost:8000/v1 \
-        --model qwen Qwen/Qwen3.6-35B-A3B \
-            --base-url http://localhost:8001/v1
+    pixi run benchmark \
+        --model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \
+        --model Qwen/Qwen3.6-35B-A3B \
+        --base-url http://localhost:8000/v1
 
     # Subset of scenarios/framings
-    pixi run python scripts/run_benchmark.py \
-        --model nemotron nemotron-3-nano:30b \
+    pixi run benchmark \
+        --model nemotron-3-nano:30b \
         --scenarios baseline ebola_like \
         --framings neutral economic \
         --seeds 3
 
     # Dry run / smoke test only
-    pixi run python scripts/run_benchmark.py \
-        --model nemotron nemotron-3-nano:30b \
+    pixi run benchmark \
+        --model nemotron-3-nano:30b \
         --dry-run
 
-    pixi run python scripts/run_benchmark.py \
-        --model nemotron nemotron-3-nano:30b \
-        --smoke-test
+    pixi run smoke
 """
 
 import argparse
@@ -39,7 +36,7 @@ import time
 import traceback
 
 from outbreakbench.llm import make_client, smoke_test
-from outbreakbench.runner import run_benchmark
+from outbreakbench.simulator import run_benchmark
 from outbreakbench.scenarios import SCENARIOS
 
 ALL_FRAMINGS = ["neutral", "public_health", "economic"]
@@ -50,11 +47,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run outbreak policy benchmark")
     parser.add_argument(
         "--model",
-        nargs=2,
         action="append",
-        metavar=("NAME", "MODEL_ID"),
         required=True,
-        help="Model to benchmark (repeatable): name model_id",
+        help="Model to benchmark (repeatable), e.g. nemotron-3-nano:30b",
     )
     parser.add_argument(
         "--base-url",
@@ -89,8 +84,8 @@ def parse_args():
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="LLM sampling temperature (default: 0.7)",
+        default=0.0,
+        help="LLM sampling temperature (default: 0.0)",
     )
     parser.add_argument(
         "--dry-run",
@@ -110,31 +105,30 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_name(model_name, scenario, framing, seed):
+def _sanitize(model):
+    return model.replace("/", "--").replace(":", "-")
+
+
+def run_name(model, scenario, framing, seed):
     return f"{scenario}_{framing}_seed{seed}"
 
 
 def main():
     args = parse_args()
 
-    models = {}
-    for name, model_id in args.model:
-        models[name] = {"base_url": args.base_url, "model_id": model_id}
-
     clients = {}
-    for name, cfg in models.items():
-        clients[name] = make_client(
-            base_url=cfg["base_url"],
-            model=cfg["model_id"],
+    for model in args.model:
+        clients[model] = make_client(
+            base_url=args.base_url,
+            model=model,
             temperature=args.temperature,
         )
 
-    # Smoke test: always run before benchmark, or standalone with --smoke-test
     print("Smoke testing models...")
     all_ok = True
-    for name in models:
-        print(f"  {name} ({models[name]['model_id']})... ", end="", flush=True)
-        ok, msg = smoke_test(clients[name])
+    for model in args.model:
+        print(f"  {model}... ", end="", flush=True)
+        ok, msg = smoke_test(clients[model])
         if ok:
             print(f"PASS")
         else:
@@ -152,25 +146,25 @@ def main():
     print()
 
     runs = []
-    for model_name in models:
+    for model in args.model:
         for scenario in args.scenarios:
             for framing in args.framings:
                 for seed in range(args.seeds):
-                    runs.append((model_name, scenario, framing, seed))
+                    runs.append((model, scenario, framing, seed))
 
     print(f"Benchmark plan: {len(runs)} runs")
-    print(f"  Models:    {list(models.keys())}")
+    print(f"  Models:    {args.model}")
     print(f"  Scenarios: {args.scenarios}")
     print(f"  Framings:  {args.framings}")
     print(f"  Seeds:     0..{args.seeds - 1}")
     print()
 
     if args.dry_run:
-        for model_name, scenario, framing, seed in runs:
-            name = run_name(model_name, scenario, framing, seed)
-            out = os.path.join(args.output, model_name, f"{name}.json")
+        for model, scenario, framing, seed in runs:
+            name = run_name(model, scenario, framing, seed)
+            out = os.path.join(args.output, _sanitize(model), f"{name}.json")
             exists = " [EXISTS]" if os.path.exists(out) else ""
-            print(f"  {model_name}/{name}{exists}")
+            print(f"  {_sanitize(model)}/{name}{exists}")
         return
 
     completed = 0
@@ -178,18 +172,18 @@ def main():
     skipped = 0
     t0 = time.time()
 
-    for i, (model_name, scenario, framing, seed) in enumerate(runs):
-        name = run_name(model_name, scenario, framing, seed)
-        out_dir = os.path.join(args.output, model_name)
+    for i, (model, scenario, framing, seed) in enumerate(runs):
+        name = run_name(model, scenario, framing, seed)
+        out_dir = os.path.join(args.output, _sanitize(model))
         out_path = os.path.join(out_dir, f"{name}.json")
 
         if args.skip_existing and os.path.exists(out_path):
             skipped += 1
-            print(f"[{i+1}/{len(runs)}] SKIP {model_name}/{name} (exists)")
+            print(f"[{i+1}/{len(runs)}] SKIP {model}/{name} (exists)")
             continue
 
         print(
-            f"[{i+1}/{len(runs)}] {model_name}/{name}...",
+            f"[{i+1}/{len(runs)}] {model}/{name}...",
             end=" ",
             flush=True,
         )
@@ -197,13 +191,11 @@ def main():
         try:
             result = run_benchmark(
                 scenario_key=scenario,
-                call_llm=clients[model_name],
+                call_llm=clients[model],
                 framing=framing,
                 seed=seed,
             )
-            result["model"] = model_name
-            result["model_id"] = models[model_name]["model_id"]
-
+            result["model"] = model
             os.makedirs(out_dir, exist_ok=True)
             with open(out_path, "w") as f:
                 json.dump(result, f, indent=2)
@@ -243,7 +235,6 @@ def write_summary(output_dir):
                 result = json.load(f)
             rows.append({
                 "model": result.get("model", model_dir),
-                "model_id": result.get("model_id", ""),
                 "scenario": result["scenario"],
                 "framing": result["framing"],
                 "seed": result["seed"],
