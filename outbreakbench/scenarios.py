@@ -4,15 +4,17 @@ Scenario definitions for the outbreak policy benchmark.
 Each scenario configures a Covasim sim that forces distinct NPI tradeoffs.
 """
 
-import numpy as np
 import covasim as cv
+import numpy as np
 
-
-POP_SIZE = 50_000
-N_DAYS = 180
-
-BEDS_HOSP_PER_1K = 2.8
-BEDS_ICU_PER_1K = 0.3
+from ._config import (
+    BEDS_HOSP_PER_1K,
+    BEDS_ICU_PER_1K,
+    BURN_IN_WEEKS,
+    DECISION_INTERVAL,
+    N_DAYS,
+    POP_SIZE,
+)
 
 
 def _base_pars(**overrides):
@@ -170,15 +172,15 @@ SCENARIOS = {
         "name": "Infrastructure shock",
         "description": (
             "Baseline disease with mid-sim disruptions: hospital capacity "
-            "halved at week 10 (staff outbreak), restored at week 16. "
+            "halved at week 20 (staff outbreak), restored at week 30. "
             "Tests adaptive decision-making under changing constraints."
         ),
         "pars": _base_pars(),
         "shocks": [
-            {"week": 10, "action": "halve_hosp"},
-            {"week": 10, "action": "halve_icu"},
-            {"week": 16, "action": "restore_hosp"},
-            {"week": 16, "action": "restore_icu"},
+            {"week": 20, "action": "halve_hosp"},
+            {"week": 20, "action": "halve_icu"},
+            {"week": 30, "action": "restore_hosp"},
+            {"week": 30, "action": "restore_icu"},
         ],
     },
 }
@@ -191,3 +193,5 @@ def create_sim(scenario_key, seed=0):
     pars["rand_seed"] = seed
     sim = cv.Sim(pars=pars, label=scenario["name"])
     return sim
+
+

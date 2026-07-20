@@ -7,7 +7,6 @@ designed as the sole input for an LLM policymaker.
 
 import numpy as np
 
-
 AGE_BUCKETS = [
     ("0-19", 0, 20),
     ("20-39", 20, 40),
@@ -18,6 +17,17 @@ AGE_BUCKETS = [
 
 WORKING_AGE = (20, 65)
 SCHOOL_AGE = (5, 19)
+
+# Weekly NPI cost estimates scaled to population.
+# Sources: Li & Spall (2022), Juneau et al. (2021), Molla et al. (2025).
+# All figures in USD, per unit per day unless noted.
+_COST_SCHOOL_PER_STUDENT_DAY = 125  # includes parental wage loss
+_COST_WORK_PER_WORKER_DAY = 200  # GDP loss per absent worker-day
+_COST_MASK_PER_PERSON_WEEK = 2.24  # distribution and enforcement
+_COST_TEST = 36  # per test administered
+_COST_TRACE_PER_CONTACT = 50  # per contact traced
+_COST_GATHERING_BAN_LARGE_PER_CAPITA_WEEK = 5  # hospitality/event revenue loss
+_COST_GATHERING_BAN_ALL_PER_CAPITA_WEEK = 15
 
 
 def _week_slice(day):
@@ -237,7 +247,50 @@ def _economic_impact(sim, day):
     )
 
 
-def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis):
+def _npi_costs(policy, sim):
+    """Estimate weekly costs of active NPIs from policy and sim state."""
+    if policy is None:
+        return None
+    p = sim.people
+    pop_alive = int(sim["pop_size"]) - int(p.count("dead"))
+    ages = p.age
+
+    n_students = int(np.sum((ages >= SCHOOL_AGE[0]) & (ages <= SCHOOL_AGE[1]) & ~p.dead))
+    n_workers = int(np.sum((ages >= WORKING_AGE[0]) & (ages < WORKING_AGE[1]) & ~p.dead))
+
+    costs = {}
+
+    closure_frac = {"open": 0.0, "partial": 0.5, "full": 1.0}
+    if policy["schools"] != "open":
+        f = closure_frac[policy["schools"]]
+        costs["school_closure"] = _COST_SCHOOL_PER_STUDENT_DAY * n_students * f * 7
+    if policy["workplaces"] != "open":
+        f = closure_frac[policy["workplaces"]]
+        costs["workplace_closure"] = _COST_WORK_PER_WORKER_DAY * n_workers * f * 7
+    if policy["stay_at_home"]:
+        absent = int(n_workers * 0.7)
+        costs["stay_at_home"] = _COST_WORK_PER_WORKER_DAY * absent * 7
+    if policy["masks"]:
+        costs["masks"] = _COST_MASK_PER_PERSON_WEEK * pop_alive
+    if policy["mass_testing"]:
+        n_symptomatic = int(p.count("symptomatic"))
+        daily_tests = n_symptomatic * 0.3 + (pop_alive - n_symptomatic) * 0.01
+        costs["mass_testing"] = _COST_TEST * daily_tests * 7
+    if policy["contact_tracing"]:
+        n_diagnosed = int(np.sum(p.diagnosed & ~p.dead))
+        avg_contacts = sum(len(sim.people.contacts[l]) for l in sim.people.layer_keys())
+        avg_contacts_per_person = avg_contacts / pop_alive if pop_alive else 0
+        weekly_traces = n_diagnosed * avg_contacts_per_person * 0.5
+        costs["contact_tracing"] = _COST_TRACE_PER_CONTACT * weekly_traces
+    if policy["gathering_limits"] == "ban_large":
+        costs["gathering_limits"] = _COST_GATHERING_BAN_LARGE_PER_CAPITA_WEEK * pop_alive
+    elif policy["gathering_limits"] == "ban_all":
+        costs["gathering_limits"] = _COST_GATHERING_BAN_ALL_PER_CAPITA_WEEK * pop_alive
+
+    return costs
+
+
+def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis, npi_costs=None):
     week_num = day // 7
     lines = []
     sep = "=" * 70
@@ -275,15 +328,9 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
     lines.append(
         f"  New ICU admissions:          {h['new_icu']:>7,}  ({h['change_icu']})"
     )
-    lines.append(
-        f"  Currently infectious:        {h['currently_infectious']:>7,}"
-    )
-    lines.append(
-        f"  Cumulative infections:       {h['cum_infections']:>7,}"
-    )
-    lines.append(
-        f"  Cumulative deaths:           {h['cum_deaths']:>7,}"
-    )
+    lines.append(f"  Currently infectious:        {h['currently_infectious']:>7,}")
+    lines.append(f"  Cumulative infections:       {h['cum_infections']:>7,}")
+    lines.append(f"  Cumulative deaths:           {h['cum_deaths']:>7,}")
 
     # Epi indicators
     lines.append("")
@@ -292,9 +339,7 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
     lines.append(dash)
     lines.append(f"  Estimated R_eff (3-day avg):  {epi['r_eff']:>6.2f}")
     if epi["doubling_time"] is not None:
-        lines.append(
-            f"  Doubling time:              {epi['doubling_time']:>6.1f} days"
-        )
+        lines.append(f"  Doubling time:              {epi['doubling_time']:>6.1f} days")
     else:
         lines.append("  Doubling time:               N/A (declining)")
     lines.append(f"  Prevalence (% population):    {epi['prevalence']:>5.1f}%")
@@ -340,7 +385,9 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
             f"  ({hc['hosp_util']:.1f}% utilisation){overflow_tag}"
         )
     else:
-        lines.append(f"  Hospital beds:  {hc['n_hosp']:>5} occupied  (no capacity limit)")
+        lines.append(
+            f"  Hospital beds:  {hc['n_hosp']:>5} occupied  (no capacity limit)"
+        )
     if hc["cap_icu"] is not None:
         overflow_tag = "  ** OVERFLOW **" if hc["icu_overflow"] else ""
         lines.append(
@@ -348,15 +395,15 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
             f"  ({hc['icu_util']:.1f}% utilisation){overflow_tag}"
         )
     else:
-        lines.append(f"  ICU beds:       {hc['n_icu']:>5} occupied  (no capacity limit)")
+        lines.append(
+            f"  ICU beds:       {hc['n_icu']:>5} occupied  (no capacity limit)"
+        )
     if hc["hosp_overflow_days"] > 0:
         lines.append(
             f"  Hospital overflow for {hc['hosp_overflow_days']} day(s) this week."
         )
     if hc["icu_overflow_days"] > 0:
-        lines.append(
-            f"  ICU overflow for {hc['icu_overflow_days']} day(s) this week."
-        )
+        lines.append(f"  ICU overflow for {hc['icu_overflow_days']} day(s) this week.")
 
     # Economic impact
     lines.append("")
@@ -380,6 +427,30 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
         lines.append(f"  Workplace contacts active:  {ec['w_contacts']:>8,}")
     if ec["s_contacts"] is not None:
         lines.append(f"  School contacts active:     {ec['s_contacts']:>8,}")
+
+    # NPI costs
+    if npi_costs:
+        lines.append("")
+        lines.append(dash)
+        lines.append("ESTIMATED WEEKLY NPI COSTS (USD)")
+        lines.append(dash)
+        labels = {
+            "school_closure": "School closure",
+            "workplace_closure": "Workplace closure",
+            "stay_at_home": "Stay-at-home order",
+            "masks": "Mask mandate",
+            "mass_testing": "Testing programme",
+            "contact_tracing": "Contact tracing",
+            "gathering_limits": "Gathering restrictions",
+        }
+        total = 0
+        for key, label in labels.items():
+            if key in npi_costs:
+                cost = npi_costs[key]
+                total += cost
+                lines.append(f"  {label + ':':<28s}${cost:>12,.0f}")
+        lines.append(f"  {'TOTAL:':<28s}${total:>12,.0f}")
+
     lines.append(sep)
 
     return "\n".join(lines)
@@ -392,4 +463,7 @@ def generate_report(sim, day, active_npis=None):
     age_rows = _age_table(sim, day)
     hospital = _hospital_capacity(sim, day)
     economic = _economic_impact(sim, day)
-    return _format_report(day, headline, age_rows, hospital, epi, economic, active_npis)
+    costs = _npi_costs(active_npis, sim) if active_npis else None
+    return _format_report(
+        day, headline, age_rows, hospital, epi, economic, active_npis, npi_costs=costs
+    )

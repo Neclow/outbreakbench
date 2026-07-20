@@ -2,7 +2,7 @@
 
 ## Scenarios
 
-Each scenario configures a distinct epidemic in a population of 50,000 people over 180 days (25 weekly decision points). The scenarios are designed so that different NPI strategies lead to meaningfully different outcomes — there is no single "correct" policy.
+Each scenario configures a distinct epidemic in a population of 50,000 people over 350 days (50 weeks). The scenarios are designed so that different NPI strategies lead to meaningfully different outcomes — there is no single "correct" policy.
 
 ### 1. Baseline COVID-like (`baseline`)
 
@@ -110,10 +110,10 @@ The LLM selects a bundle each week. Options are applied simultaneously and inter
 
 ### 9. Infrastructure shock (`infrastructure_shock`)
 
-Baseline disease but with mid-simulation disruptions: hospital and ICU capacity halved at week 10 (simulating a staff outbreak) and restored at week 16. The LLM is alerted via an `** ALERT **` banner in the surveillance report. Tests whether the LLM adapts its strategy to changing constraints rather than following a fixed playbook.
+Baseline disease but with mid-simulation disruptions: hospital and ICU capacity halved at week 20 (simulating a staff outbreak) and restored at week 30. The LLM is alerted via an `** ALERT **` banner in the surveillance report. Tests whether the LLM adapts its strategy to changing constraints rather than following a fixed playbook.
 
-- Hospital beds: 140 → 70 (weeks 10–15), then restored
-- ICU beds: 15 → 7 (weeks 10–15), then restored
+- Hospital beds: 140 → 70 (weeks 20–29), then restored
+- ICU beds: 15 → 7 (weeks 20–29), then restored
 - Key tension: the LLM must escalate NPIs pre-emptively when capacity drops, then know when to de-escalate
 
 ## Infrastructure Shocks
@@ -132,6 +132,21 @@ Some scenarios include mid-simulation events that change the environment. These 
 
 The LLM response includes an optional `notes` field — a private scratchpad that persists across weeks. The LLM's notes from the previous week are shown in the next surveillance report. This tests whether models plan ahead, track trends, or set conditional triggers for future decisions.
 
+## Simulation Timing
+
+- **Total duration**: 50 weeks (350 days)
+- **Burn-in**: 3 weeks with no intervention. All models see identical surveillance reports for the same seed, ensuring a common starting point.
+- **Decision frequency**: Every 2 weeks (biweekly). ~23 decision points per run.
+- **Temperature**: 0 (greedy decoding).
+
+**Why 50 weeks?** A near-full-year timeline matches real pandemic timescales and creates three natural phases: observe (burn-in) → respond (active management) → wind down (de-escalation). The back half tests whether models correctly lift NPIs when the epidemic subsides.
+
+**Why burn-in?** Without it, Covasim's stochastic trajectories diverge from week 2 onwards (once different LLM decisions alter transmission). The burn-in guarantees identical initial conditions across models for the same seed, so cross-model comparisons are clean.
+
+**Why biweekly?** Real-world NPI reviews happened every 2–4 weeks during COVID (e.g., UK Coronavirus Act mandated 3-week reviews). Weekly decisions are unrealistically fast and let models course-correct before seeing the impact of their previous choice. Biweekly forces commitment and penalises oscillation.
+
+**Why temperature 0?** Standard in LLM benchmarks (MMLU, MedQA, HELM, Medmarks). Measures the model's greedy policy — its actual calibration — rather than sampling from its distribution. With temp=0.7, ~50% of cross-seed variance on mild scenarios came from LLM sampling noise, masking the real finding (Nemotron over-protects by default).
+
 ## Stochasticity
 
-Each (scenario, framing) combination is run with 5 random seeds (0–4) to account for Covasim's stochastic transmission. Results are reported as mean ± std across seeds.
+Each (scenario, framing) combination is run with 5 random seeds (0–4). With temperature 0 and a 3-week burn-in, cross-seed variance reflects genuine responses to different epidemic trajectories, not LLM sampling noise. Results are reported as mean ± std across seeds.
