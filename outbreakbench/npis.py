@@ -4,9 +4,8 @@ NPI action mapping for the outbreak policy benchmark.
 Translates LLM policy decisions into Covasim simulation state changes.
 """
 
-import numpy as np
 import covasim as cv
-
+import numpy as np
 
 DEFAULT_POLICY = {
     "schools": "open",
@@ -30,6 +29,22 @@ _TESTING_BASELINE_PROB = 0.05
 _TRACE_PROBS = {"h": 1.0, "s": 0.8, "w": 0.5, "c": 0.05}
 _TRACE_TIME = {"h": 1, "s": 2, "w": 2, "c": 5}
 _STAY_AT_HOME_FRACTION = 0.3
+
+FATIGUE_RATE = 0.05  # per week; half-life ~14 weeks (Eikenberry 2020)
+FATIGUE_FLOOR = 0.5  # compliance never drops below 50%
+
+_FATIGUE_KEYS = ["schools", "workplaces", "masks", "mass_testing",
+                 "contact_tracing", "gathering_limits", "stay_at_home"]
+
+
+def _is_active(key, value):
+    """Whether an NPI setting differs from its default (no-intervention) state."""
+    return value != DEFAULT_POLICY[key]
+
+
+def _compliance(weeks_active):
+    """Compliance multiplier given consecutive weeks of use."""
+    return FATIGUE_FLOOR + (1.0 - FATIGUE_FLOOR) * np.exp(-FATIGUE_RATE * weeks_active)
 
 
 def validate_policy(policy):
@@ -66,15 +81,28 @@ class NPIManager:
         self._test_prob = None
         self._contact_tracing = None
         self._current_policy = dict(DEFAULT_POLICY)
+        self._active_weeks = {k: 0 for k in _FATIGUE_KEYS}
 
     def apply(self, sim, policy):
         """Apply an NPI policy to the sim. Call before advancing to the next week."""
         policy = validate_policy(policy)
+        self._update_fatigue(policy)
         self._apply_contacts(sim, policy)
         self._apply_betas(sim, policy)
         self._apply_testing(sim, policy)
         self._apply_tracing(sim, policy)
         self._current_policy = policy
+
+    def _update_fatigue(self, policy):
+        for key in _FATIGUE_KEYS:
+            if _is_active(key, policy[key]):
+                self._active_weeks[key] += 1
+            else:
+                self._active_weeks[key] = 0
+
+    def compliance(self, key):
+        """Current compliance multiplier for an NPI (1.0 = full, FATIGUE_FLOOR = minimum)."""
+        return _compliance(self._active_weeks[key])
 
     @property
     def current_policy(self):
@@ -83,12 +111,23 @@ class NPIManager:
     def _desired_contact_fractions(self, policy):
         fracs = {}
         fracs["h"] = 1.0
-        fracs["s"] = _CLOSURE_FRACTIONS[policy["schools"]]
-        w_closure = _CLOSURE_FRACTIONS[policy["workplaces"]]
-        w_stay = _STAY_AT_HOME_FRACTION if policy["stay_at_home"] else 1.0
+
+        c_s = self.compliance("schools")
+        target_s = _CLOSURE_FRACTIONS[policy["schools"]]
+        fracs["s"] = 1.0 - c_s * (1.0 - target_s)
+
+        c_w = self.compliance("workplaces")
+        target_w = _CLOSURE_FRACTIONS[policy["workplaces"]]
+        w_closure = 1.0 - c_w * (1.0 - target_w)
+
+        c_sah = self.compliance("stay_at_home")
+        if policy["stay_at_home"]:
+            w_stay = 1.0 - c_sah * (1.0 - _STAY_AT_HOME_FRACTION)
+        else:
+            w_stay = 1.0
         fracs["w"] = min(w_closure, w_stay)
-        c_stay = _STAY_AT_HOME_FRACTION if policy["stay_at_home"] else 1.0
-        fracs["c"] = c_stay
+
+        fracs["c"] = 1.0 - c_sah * (1.0 - _STAY_AT_HOME_FRACTION) if policy["stay_at_home"] else 1.0
         return fracs
 
     def _apply_contacts(self, sim, policy):
@@ -143,25 +182,32 @@ class NPIManager:
                 stored[key] = stored[key][keep]
 
     def _apply_betas(self, sim, policy):
+        c_mask = self.compliance("masks")
+        c_gath = self.compliance("gathering_limits")
         for lkey in sim.people.layer_keys():
             mult = 1.0
             if policy["masks"] and lkey in ("s", "w", "c"):
-                mult *= _MASK_BETA
+                mult *= 1.0 - c_mask * (1.0 - _MASK_BETA)
             if lkey == "c":
-                mult *= _GATHERING_BETA[policy["gathering_limits"]]
+                g_beta = _GATHERING_BETA[policy["gathering_limits"]]
+                mult *= 1.0 - c_gath * (1.0 - g_beta)
             sim["beta_layer"][lkey] = self._baseline_betas[lkey] * mult
 
     def _apply_testing(self, sim, policy):
         if policy["mass_testing"]:
+            c = self.compliance("mass_testing")
             if self._test_prob is None:
                 self._test_prob = cv.test_prob(
-                    symp_prob=_TESTING_SYMP_PROB,
-                    asymp_prob=0.01,
+                    symp_prob=_TESTING_SYMP_PROB * c,
+                    asymp_prob=0.01 * c,
                     start_day=0,
                     test_delay=1,
                 )
                 self._test_prob.initialize(sim)
                 sim["interventions"].append(self._test_prob)
+            else:
+                self._test_prob.symp_prob = _TESTING_SYMP_PROB * c
+                self._test_prob.asymp_prob = 0.01 * c
         else:
             if self._test_prob is not None:
                 if self._test_prob in sim["interventions"]:
@@ -170,14 +216,18 @@ class NPIManager:
 
     def _apply_tracing(self, sim, policy):
         if policy["contact_tracing"]:
+            c = self.compliance("contact_tracing")
             if self._contact_tracing is None:
                 self._contact_tracing = cv.contact_tracing(
-                    trace_probs=_TRACE_PROBS,
+                    trace_probs={k: v * c for k, v in _TRACE_PROBS.items()},
                     trace_time=_TRACE_TIME,
                     start_day=0,
                 )
                 self._contact_tracing.initialize(sim)
                 sim["interventions"].append(self._contact_tracing)
+            else:
+                for k, v in _TRACE_PROBS.items():
+                    self._contact_tracing.trace_probs[k] = v * c
         else:
             if self._contact_tracing is not None:
                 if self._contact_tracing in sim["interventions"]:
