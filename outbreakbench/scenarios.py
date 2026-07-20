@@ -4,7 +4,12 @@ Scenario definitions for the outbreak policy benchmark.
 Each scenario configures a Covasim sim that forces distinct NPI tradeoffs.
 """
 
-import covasim as cv
+import warnings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="could not install some fonts")
+    import covasim as cv
+
 import numpy as np
 
 from ._config import (
