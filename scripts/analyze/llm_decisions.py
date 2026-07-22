@@ -265,7 +265,7 @@ def main():
         print("No runs found.")
         return
 
-    analyses = [analyze_run(r) for r in runs]
+    analyses = [a for a in (analyze_run(r) for r in runs) if a]
 
     models = sorted(set(a["model"] for a in analyses))
     for model_name in models:

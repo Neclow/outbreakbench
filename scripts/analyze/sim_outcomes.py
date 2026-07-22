@@ -140,10 +140,15 @@ def plot_weekly_decisions(results, model_name, scenario="baseline"):
             continue
         all_scores = []
         for r in subset:
+            if not r["decisions"]:
+                continue
             scores = [npi_stringency(d["policy"]) for d in r["decisions"]]
             all_scores.append(scores)
 
-        all_scores = np.array(all_scores)
+        if not all_scores:
+            continue
+        min_len = min(len(s) for s in all_scores)
+        all_scores = np.array([s[:min_len] for s in all_scores])
         weeks = np.arange(1, all_scores.shape[1] + 1)
         mean = all_scores.mean(axis=0)
         std = all_scores.std(axis=0)
