@@ -8,6 +8,8 @@ and applying its NPI decisions each cycle.
 import json
 import time
 
+import numpy as np
+
 from .llm import build_system_prompt, build_user_message, parse_response
 from .npis import DEFAULT_POLICY, NPIManager
 from .report import generate_report
@@ -21,6 +23,8 @@ def run_benchmark(
     call_llm,
     framing="neutral",
     seed=0,
+    setting_attribution=False,
+    age_targeting=False,
 ):
     """Run a single benchmark: one scenario, one LLM, one framing, one seed.
 
@@ -35,6 +39,11 @@ def run_benchmark(
         One of "neutral", "public_health", "economic".
     seed : int
         Random seed for the simulation.
+    setting_attribution : bool
+        If True, include degraded transmission setting attribution in
+        surveillance reports (requires contact tracing data from the ABM).
+    age_targeting : bool
+        If True, enable age-targeted NPIs (elderly shielding).
 
     Returns
     -------
@@ -48,20 +57,24 @@ def run_benchmark(
     n_days = sim["n_days"]
     n_weeks = n_days // 7
 
-    system_prompt = build_system_prompt(framing, pop_size=pop_size, n_days=n_days)
-    mgr = NPIManager(sim)
+    system_prompt = build_system_prompt(framing, pop_size=pop_size, n_days=n_days,
+                                       age_targeting=age_targeting)
+    mgr = NPIManager(sim, age_targeting=age_targeting)
 
     shocks = scenario.get("shocks", [])
+    sa_rng = np.random.default_rng(seed + 1) if setting_attribution else None
 
     n_decisions_expected = (
         n_weeks - BURN_IN_WEEKS + DECISION_INTERVAL - 1
     ) // DECISION_INTERVAL
 
+    from .npis import DEFAULT_POLICY_AGE_TARGETED
     decisions = []
     messages = []
     burn_in_reports = []
     pending_alerts = []
-    current_policy = dict(DEFAULT_POLICY)
+    base_policy = DEFAULT_POLICY_AGE_TARGETED if age_targeting else DEFAULT_POLICY
+    current_policy = dict(base_policy)
     prev_notes = ""
 
     t0 = time.time()
@@ -83,7 +96,8 @@ def run_benchmark(
 
         # Burn-in: accumulate reports but don't ask the LLM
         if week < BURN_IN_WEEKS:
-            report = generate_report(sim, day, active_npis=current_policy)
+            report = generate_report(sim, day, active_npis=current_policy,
+                                     setting_attribution_rng=sa_rng)
             if pending_alerts:
                 report += "\n\n** ALERT **\n" + "\n".join(f"  - {m}" for m in pending_alerts)
                 pending_alerts = []
@@ -95,7 +109,8 @@ def run_benchmark(
         if weeks_since_burn_in % DECISION_INTERVAL != 0:
             continue
 
-        report = generate_report(sim, day, active_npis=current_policy)
+        report = generate_report(sim, day, active_npis=current_policy,
+                                 setting_attribution_rng=sa_rng)
         if pending_alerts:
             report += "\n\n** ALERT **\n" + "\n".join(f"  - {m}" for m in pending_alerts)
             pending_alerts = []
@@ -128,7 +143,8 @@ def run_benchmark(
         response_text = call_llm(system_prompt, messages)
 
         try:
-            policy, justification, notes = parse_response(response_text)
+            policy, justification, notes = parse_response(response_text,
+                                                         age_targeting=age_targeting)
         except (ValueError, json.JSONDecodeError, AssertionError) as e:
             print(
                 f"\n  PARSE FAILURE at week {week + 1}: {e}"

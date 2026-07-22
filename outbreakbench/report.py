@@ -18,6 +18,11 @@ AGE_BUCKETS = [
 WORKING_AGE = (20, 65)
 SCHOOL_AGE = (5, 19)
 
+_SETTING_LABELS = {"h": "Household", "s": "School", "w": "Workplace", "c": "Community"}
+_LINKAGE_PROB = {"h": 0.85, "s": 0.60, "w": 0.55, "c": 0.10}
+_LINKAGE_PROB_NO_TRACING = {"h": 0.50, "s": 0.05, "w": 0.05, "c": 0.02}
+_TRACING_CAPACITY_PER_10K = 100
+
 # Weekly NPI cost estimates scaled to population.
 # Sources: Li & Spall (2022), Juneau et al. (2021), Molla et al. (2025).
 # All figures in USD, per unit per day unless noted.
@@ -28,6 +33,7 @@ _COST_TEST = 36  # per test administered
 _COST_TRACE_PER_CONTACT = 50  # per contact traced
 _COST_GATHERING_BAN_LARGE_PER_CAPITA_WEEK = 5  # hospitality/event revenue loss
 _COST_GATHERING_BAN_ALL_PER_CAPITA_WEEK = 15
+_COST_SHIELDING_PER_ELDERLY_WEEK = 50  # care delivery, mental health, lost productivity
 
 
 def _week_slice(day):
@@ -247,6 +253,57 @@ def _economic_impact(sim, day):
     )
 
 
+def _transmission_settings(sim, day, contact_tracing_active, rng):
+    """Setting attribution from contact tracing data, degraded for realism.
+
+    Only diagnosed cases are eligible. Of those, a fraction are
+    epidemiologically linked to a transmission setting depending on the
+    setting type (household >> community) and whether tracing capacity
+    is overwhelmed.
+    """
+    p = sim.people
+    ws = _week_slice(day)
+
+    log_by_target = {}
+    for e in p.infection_log:
+        if e["layer"] != "seed_infection":
+            log_by_target[e["target"]] = e
+
+    diag_this_week = []
+    for i in range(sim["pop_size"]):
+        if np.isfinite(p.date_diagnosed[i]) and ws.start <= p.date_diagnosed[i] <= ws.stop - 1:
+            diag_this_week.append(i)
+
+    n_diagnosed = len(diag_this_week)
+    if n_diagnosed == 0:
+        return None
+
+    capacity = _TRACING_CAPACITY_PER_10K * sim["pop_size"] / 10_000
+    capacity_mult = min(1.0, capacity / n_diagnosed)
+
+    linkage = _LINKAGE_PROB if contact_tracing_active else _LINKAGE_PROB_NO_TRACING
+
+    setting_counts = {k: 0 for k in _SETTING_LABELS}
+    n_unknown = 0
+
+    for pid in diag_this_week:
+        if pid not in log_by_target:
+            n_unknown += 1
+            continue
+        layer = log_by_target[pid]["layer"]
+        if rng.random() < linkage.get(layer, 0.1) * capacity_mult:
+            setting_counts[layer] = setting_counts.get(layer, 0) + 1
+        else:
+            n_unknown += 1
+
+    return dict(
+        n_diagnosed=n_diagnosed,
+        n_linked=sum(setting_counts.values()),
+        n_unknown=n_unknown,
+        settings=setting_counts,
+    )
+
+
 def _npi_costs(policy, sim):
     """Estimate weekly costs of active NPIs from policy and sim state."""
     if policy is None:
@@ -286,11 +343,14 @@ def _npi_costs(policy, sim):
         costs["gathering_limits"] = _COST_GATHERING_BAN_LARGE_PER_CAPITA_WEEK * pop_alive
     elif policy["gathering_limits"] == "ban_all":
         costs["gathering_limits"] = _COST_GATHERING_BAN_ALL_PER_CAPITA_WEEK * pop_alive
+    if policy.get("shielding_elderly", False):
+        n_elderly = int(np.sum((ages >= 60) & ~p.dead))
+        costs["shielding_elderly"] = _COST_SHIELDING_PER_ELDERLY_WEEK * n_elderly
 
     return costs
 
 
-def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis, npi_costs=None):
+def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis, npi_costs=None, settings=None):
     week_num = day // 7
     lines = []
     sep = "=" * 70
@@ -442,6 +502,7 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
             "mass_testing": "Testing programme",
             "contact_tracing": "Contact tracing",
             "gathering_limits": "Gathering restrictions",
+            "shielding_elderly": "Elderly shielding",
         }
         total = 0
         for key, label in labels.items():
@@ -451,19 +512,62 @@ def _format_report(day, headline, age_rows, hospital, epi, economic, active_npis
                 lines.append(f"  {label + ':':<28s}${cost:>12,.0f}")
         lines.append(f"  {'TOTAL:':<28s}${total:>12,.0f}")
 
+    if settings is not None:
+        lines.append("")
+        lines.append(dash)
+        lines.append("TRANSMISSION SETTING ATTRIBUTION (contact tracing data)")
+        lines.append(dash)
+        n_d = settings["n_diagnosed"]
+        n_l = settings["n_linked"]
+        n_u = settings["n_unknown"]
+        pct = n_l / n_d * 100 if n_d > 0 else 0
+        lines.append(
+            f"  Of {n_d:,} cases diagnosed this week, {n_l:,} ({pct:.0f}%) had an"
+        )
+        lines.append(
+            f"  identified transmission setting. {n_u:,} could not be linked."
+        )
+        lines.append("")
+        lines.append("  Identified settings:")
+        for lkey in ("h", "s", "w", "c"):
+            count = settings["settings"].get(lkey, 0)
+            lpct = count / n_l * 100 if n_l > 0 else 0
+            lines.append(
+                f"    {_SETTING_LABELS[lkey] + ':':<14s}{count:>5,}  ({lpct:4.0f}% of linked)"
+            )
+        lines.append("")
+        lines.append(
+            "  NOTE: Community transmission is likely underrepresented."
+        )
+        lines.append(
+            "  Unlinked cases may include untraced community transmission."
+        )
+
     lines.append(sep)
 
     return "\n".join(lines)
 
 
-def generate_report(sim, day, active_npis=None):
-    """Generate a weekly surveillance report from a mid-run Covasim sim."""
+def generate_report(sim, day, active_npis=None, setting_attribution_rng=None):
+    """Generate a weekly surveillance report from a mid-run Covasim sim.
+
+    Parameters
+    ----------
+    setting_attribution_rng : numpy.random.Generator or None
+        If provided, include degraded transmission setting attribution
+        derived from the sim's infection log and diagnosis state.
+    """
     headline = _headline(sim, day)
     epi = _epi_indicators(sim, day)
     age_rows = _age_table(sim, day)
     hospital = _hospital_capacity(sim, day)
     economic = _economic_impact(sim, day)
     costs = _npi_costs(active_npis, sim) if active_npis else None
+    settings = None
+    if setting_attribution_rng is not None:
+        ct_active = active_npis is not None and active_npis.get("contact_tracing", False)
+        settings = _transmission_settings(sim, day, ct_active, setting_attribution_rng)
     return _format_report(
-        day, headline, age_rows, hospital, epi, economic, active_npis, npi_costs=costs
+        day, headline, age_rows, hospital, epi, economic, active_npis,
+        npi_costs=costs, settings=settings,
     )
