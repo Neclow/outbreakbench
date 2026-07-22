@@ -17,7 +17,7 @@ baselines = "python scripts/run/baselines.py"
 sweep = "bash scripts/run/sweep.sh"
 # Analysis
 analyze = "python scripts/analyze/llm_decisions.py"
-plot = "python scripts/analyze/sim_outcomes.py"
+report = "python scripts/analyze/scenario_report.py"
 
 [dependencies]
 python = ">=3.13,<3.14"
