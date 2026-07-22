@@ -2,3 +2,4 @@ nemotron-3-nano:30b
 qwen3:14b
 magistral:24b
 phi4-reasoning:14b
+baichuan-inc/baichuan-m2-32b:q4_k_m

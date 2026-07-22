@@ -98,9 +98,9 @@ def parse_args():
         help="Run smoke test for each model and exit",
     )
     parser.add_argument(
-        "--skip-existing",
+        "--overwrite",
         action="store_true",
-        help="Skip runs whose output file already exists",
+        help="Re-run even if output file already exists (default: skip existing)",
     )
     return parser.parse_args()
 
@@ -116,8 +116,33 @@ def run_name(model, scenario, framing, seed):
 def main():
     args = parse_args()
 
-    clients = {}
+    runs = []
     for model in args.model:
+        for scenario in args.scenarios:
+            for framing in args.framings:
+                for seed in range(args.seeds):
+                    runs.append((model, scenario, framing, seed))
+
+    if not args.overwrite:
+        runs = [
+            (model, scenario, framing, seed)
+            for model, scenario, framing, seed in runs
+            if not os.path.exists(
+                os.path.join(
+                    args.output, _sanitize(model),
+                    f"{run_name(model, scenario, framing, seed)}.json",
+                )
+            )
+        ]
+
+    models_needed = sorted(set(m for m, _, _, _ in runs))
+
+    if not args.smoke_test and not models_needed:
+        print("All runs already exist. Nothing to do.")
+        return
+
+    clients = {}
+    for model in (args.model if args.smoke_test else models_needed):
         clients[model] = make_client(
             base_url=args.base_url,
             model=model,
@@ -126,7 +151,7 @@ def main():
 
     print("Smoke testing models...")
     all_ok = True
-    for model in args.model:
+    for model in clients:
         print(f"  {model}... ", end="", flush=True)
         ok, msg = smoke_test(clients[model])
         if ok:
@@ -145,13 +170,6 @@ def main():
 
     print()
 
-    runs = []
-    for model in args.model:
-        for scenario in args.scenarios:
-            for framing in args.framings:
-                for seed in range(args.seeds):
-                    runs.append((model, scenario, framing, seed))
-
     print(f"Benchmark plan: {len(runs)} runs")
     print(f"  Models:    {args.model}")
     print(f"  Scenarios: {args.scenarios}")
@@ -169,18 +187,12 @@ def main():
 
     completed = 0
     failed = 0
-    skipped = 0
     t0 = time.time()
 
     for i, (model, scenario, framing, seed) in enumerate(runs):
         name = run_name(model, scenario, framing, seed)
         out_dir = os.path.join(args.output, _sanitize(model))
         out_path = os.path.join(out_dir, f"{name}.json")
-
-        if args.skip_existing and os.path.exists(out_path):
-            skipped += 1
-            print(f"[{i+1}/{len(runs)}] SKIP {model}/{name} (exists)")
-            continue
 
         print(
             f"[{i+1}/{len(runs)}] {model}/{name}...",
@@ -214,7 +226,7 @@ def main():
             traceback.print_exc()
 
     elapsed = time.time() - t0
-    print(f"\nDone: {completed} completed, {failed} failed, {skipped} skipped")
+    print(f"\nDone: {completed} completed, {failed} failed")
     print(f"Total time: {elapsed:.1f}s")
 
     if completed > 0:
