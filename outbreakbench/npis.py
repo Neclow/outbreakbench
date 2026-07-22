@@ -17,6 +17,13 @@ DEFAULT_POLICY = {
     "stay_at_home": False,
 }
 
+AGE_TARGETED_FIELDS = {"shielding_elderly"}
+
+DEFAULT_POLICY_AGE_TARGETED = {
+    **DEFAULT_POLICY,
+    "shielding_elderly": False,
+}
+
 SCHOOL_OPTIONS = {"full", "partial", "open"}
 WORKPLACE_OPTIONS = {"full", "partial", "open"}
 GATHERING_OPTIONS = {"ban_large", "ban_all", "none"}
@@ -29,17 +36,20 @@ _TESTING_BASELINE_PROB = 0.05
 _TRACE_PROBS = {"h": 1.0, "s": 0.8, "w": 0.5, "c": 0.05}
 _TRACE_TIME = {"h": 1, "s": 2, "w": 2, "c": 5}
 _STAY_AT_HOME_FRACTION = 0.3
+_SHIELDING_CONTACT_FACTOR = 0.3  # elderly keep 30% of contacts
+_SHIELDING_AGE = 60
 
 FATIGUE_RATE = 0.05  # per week; half-life ~14 weeks (Eikenberry 2020)
 FATIGUE_FLOOR = 0.5  # compliance never drops below 50%
 
 _FATIGUE_KEYS = ["schools", "workplaces", "masks", "mass_testing",
-                 "contact_tracing", "gathering_limits", "stay_at_home"]
+                 "contact_tracing", "gathering_limits", "stay_at_home",
+                 "shielding_elderly"]
 
 
 def _is_active(key, value):
     """Whether an NPI setting differs from its default (no-intervention) state."""
-    return value != DEFAULT_POLICY[key]
+    return value != DEFAULT_POLICY_AGE_TARGETED[key]
 
 
 def _compliance(weeks_active):
@@ -47,9 +57,10 @@ def _compliance(weeks_active):
     return FATIGUE_FLOOR + (1.0 - FATIGUE_FLOOR) * np.exp(-FATIGUE_RATE * weeks_active)
 
 
-def validate_policy(policy):
+def validate_policy(policy, age_targeting=False):
     """Validate a policy dict. Returns normalized copy with defaults filled in."""
-    out = dict(DEFAULT_POLICY)
+    base = DEFAULT_POLICY_AGE_TARGETED if age_targeting else DEFAULT_POLICY
+    out = dict(base)
     out.update(policy)
     assert out["schools"] in SCHOOL_OPTIONS
     assert out["workplaces"] in WORKPLACE_OPTIONS
@@ -58,14 +69,19 @@ def validate_policy(policy):
     assert isinstance(out["mass_testing"], bool)
     assert isinstance(out["contact_tracing"], bool)
     assert isinstance(out["stay_at_home"], bool)
+    if age_targeting:
+        assert isinstance(out["shielding_elderly"], bool)
+    else:
+        out.pop("shielding_elderly", None)
     return out
 
 
 class NPIManager:
     """Manages NPI application on a Covasim sim across decision cycles."""
 
-    def __init__(self, sim):
+    def __init__(self, sim, age_targeting=False):
         """Initialize from a sim that has been initialized (sim.initialize() called)."""
+        self._age_targeting = age_targeting
         self._baseline_betas = dict(sim["beta_layer"])
         self._baseline_edges = {}
         self._stored_edges = {}
@@ -80,21 +96,37 @@ class NPIManager:
 
         self._test_prob = None
         self._contact_tracing = None
-        self._current_policy = dict(DEFAULT_POLICY)
+        base = DEFAULT_POLICY_AGE_TARGETED if age_targeting else DEFAULT_POLICY
+        self._current_policy = dict(base)
         self._active_weeks = {k: 0 for k in _FATIGUE_KEYS}
+
+        # For elderly shielding: store per-edge baseline betas and elderly masks
+        self._shielding_active = False
+        if age_targeting:
+            elderly = sim.people.age >= _SHIELDING_AGE
+            self._elderly_edge_masks = {}
+            for lkey in sim.people.layer_keys():
+                layer = sim.people.contacts[lkey]
+                p1_old = elderly[layer["p1"]]
+                p2_old = elderly[layer["p2"]]
+                self._elderly_edge_masks[lkey] = p1_old | p2_old
 
     def apply(self, sim, policy):
         """Apply an NPI policy to the sim. Call before advancing to the next week."""
-        policy = validate_policy(policy)
+        policy = validate_policy(policy, age_targeting=self._age_targeting)
         self._update_fatigue(policy)
         self._apply_contacts(sim, policy)
         self._apply_betas(sim, policy)
         self._apply_testing(sim, policy)
         self._apply_tracing(sim, policy)
+        if self._age_targeting:
+            self._apply_shielding(sim, policy)
         self._current_policy = policy
 
     def _update_fatigue(self, policy):
         for key in _FATIGUE_KEYS:
+            if key not in policy:
+                continue
             if _is_active(key, policy[key]):
                 self._active_weeks[key] += 1
             else:
@@ -233,3 +265,70 @@ class NPIManager:
                 if self._contact_tracing in sim["interventions"]:
                     sim["interventions"].remove(self._contact_tracing)
                 self._contact_tracing = None
+
+    def _apply_shielding(self, sim, policy):
+        """Reduce contacts for people aged 60+ across all layers."""
+        if policy.get("shielding_elderly", False):
+            c = self.compliance("shielding_elderly")
+            target = 1.0 - c * (1.0 - _SHIELDING_CONTACT_FACTOR)
+            self._shielding_active = True
+        elif self._shielding_active:
+            target = 1.0
+            self._shielding_active = False
+        else:
+            return
+
+        elderly = sim.people.age >= _SHIELDING_AGE
+        for lkey in sim.people.layer_keys():
+            layer = sim.people.contacts[lkey]
+            stored = self._stored_edges[lkey]
+
+            # Rebuild elderly mask for current edges (edges may have been
+            # added/removed by other NPIs since init)
+            n_sim = len(layer["p1"])
+            n_stored = len(stored["p1"])
+            if n_sim == 0 and n_stored == 0:
+                continue
+
+            sim_elderly = np.zeros(n_sim, dtype=bool)
+            if n_sim > 0:
+                sim_elderly = elderly[layer["p1"]] | elderly[layer["p2"]]
+            stored_elderly = np.zeros(n_stored, dtype=bool)
+            if n_stored > 0:
+                stored_elderly = elderly[stored["p1"]] | elderly[stored["p2"]]
+
+            n_elderly_total = int(np.sum(sim_elderly)) + int(np.sum(stored_elderly))
+            if n_elderly_total == 0:
+                continue
+
+            n_elderly_sim = int(np.sum(sim_elderly))
+            current_frac = n_elderly_sim / n_elderly_total
+            diff = current_frac - target
+
+            if abs(diff) < 0.01:
+                continue
+
+            if diff > 0:
+                n_to_move = min(int(n_elderly_total * diff), n_elderly_sim)
+                if n_to_move == 0:
+                    continue
+                elderly_inds = np.where(sim_elderly)[0]
+                chosen = np.random.choice(elderly_inds, size=n_to_move, replace=False)
+                for key in ("p1", "p2", "beta"):
+                    stored[key] = np.concatenate([stored[key], layer[key][chosen]])
+                keep = np.ones(n_sim, dtype=bool)
+                keep[chosen] = False
+                for key in ("p1", "p2", "beta"):
+                    layer[key] = layer[key][keep]
+            else:
+                n_to_move = min(int(n_elderly_total * (-diff)), int(np.sum(stored_elderly)))
+                if n_to_move == 0:
+                    continue
+                elderly_stored_inds = np.where(stored_elderly)[0]
+                chosen = np.random.choice(elderly_stored_inds, size=n_to_move, replace=False)
+                for key in ("p1", "p2", "beta"):
+                    layer[key] = np.concatenate([layer[key], stored[key][chosen]])
+                keep = np.ones(n_stored, dtype=bool)
+                keep[chosen] = False
+                for key in ("p1", "p2", "beta"):
+                    stored[key] = stored[key][keep]

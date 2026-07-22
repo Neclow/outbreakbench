@@ -10,7 +10,7 @@ import re
 
 from openai import OpenAI
 
-from .npis import DEFAULT_POLICY, validate_policy
+from .npis import DEFAULT_POLICY, DEFAULT_POLICY_AGE_TARGETED, validate_policy
 
 NPI_MENU = """\
 You may choose to impose no interventions by setting "do_nothing" to true.
@@ -53,19 +53,22 @@ Note: public compliance with any intervention erodes the longer it remains in \
 effect. Prolonged mandates become less effective over time. Lifting and \
 reimposing an intervention can restore compliance."""
 
-RESPONSE_FORMAT = """\
-Respond with a JSON block. If you choose no interventions:
+_SHIELDING_MENU = """
+8. shielding_elderly: true or false
+   - Advisory for people aged 60+ to stay at home and minimise contacts
+   - Reduces elderly contacts to ~30% of normal across all settings
+   - Protects the most vulnerable but increases isolation and care burden"""
 
+_RESPONSE_DO_NOTHING = """\
 ```json
 {
     "do_nothing": true,
     "justification": "Your reasoning here",
     "notes": "Private scratchpad — jot down observations, plans, or reminders for future weeks. This will be shown back to you next fortnight."
 }
-```
+```"""
 
-If you choose to intervene, set "do_nothing" to false and specify all policy fields:
-
+_RESPONSE_INTERVENE_BASE = """\
 ```json
 {
     "do_nothing": false,
@@ -80,6 +83,33 @@ If you choose to intervene, set "do_nothing" to false and specify all policy fie
     "notes": "Private scratchpad — jot down observations, plans, or reminders for future weeks. This will be shown back to you next fortnight."
 }
 ```"""
+
+_RESPONSE_INTERVENE_AGE = """\
+```json
+{
+    "do_nothing": false,
+    "schools": "open",
+    "workplaces": "open",
+    "masks": false,
+    "mass_testing": false,
+    "contact_tracing": false,
+    "gathering_limits": "none",
+    "stay_at_home": false,
+    "shielding_elderly": false,
+    "justification": "Your reasoning here",
+    "notes": "Private scratchpad — jot down observations, plans, or reminders for future weeks. This will be shown back to you next fortnight."
+}
+```"""
+
+
+def _build_response_format(age_targeting=False):
+    intervene = _RESPONSE_INTERVENE_AGE if age_targeting else _RESPONSE_INTERVENE_BASE
+    return (
+        f"Respond with a JSON block. If you choose no interventions:\n\n"
+        f"{_RESPONSE_DO_NOTHING}\n\n"
+        f"If you choose to intervene, set \"do_nothing\" to false and specify "
+        f"all policy fields:\n\n{intervene}"
+    )
 
 _FRAMINGS = {
     "neutral": (
@@ -113,15 +143,20 @@ _FRAMINGS = {
 }
 
 
-def build_system_prompt(framing="neutral", pop_size=50_000, n_days=350):
+def build_system_prompt(framing="neutral", pop_size=50_000, n_days=350,
+                        age_targeting=False):
     """Build the system prompt for the LLM policymaker."""
     if framing not in _FRAMINGS:
         raise ValueError(f"Unknown framing: {framing}. Options: {list(_FRAMINGS)}")
 
     n_weeks = n_days // 7
     intro = _FRAMINGS[framing].format(pop_size=pop_size, n_weeks=n_weeks)
+    menu = NPI_MENU
+    if age_targeting:
+        menu += _SHIELDING_MENU
+    response_fmt = _build_response_format(age_targeting=age_targeting)
 
-    return f"{intro}\n\n{NPI_MENU}\n\n{RESPONSE_FORMAT}"
+    return f"{intro}\n\n{menu}\n\n{response_fmt}"
 
 
 def build_user_message(report, week_number=None, prev_notes=None):
@@ -205,7 +240,7 @@ def smoke_test(call_llm):
     return True, f"OK — policy={policy}, justification={justification[:80]}"
 
 
-def parse_response(text):
+def parse_response(text, age_targeting=False):
     """Parse LLM response into (policy_dict, justification, notes).
 
     Extracts JSON from ```json``` fences or raw JSON.
@@ -226,16 +261,18 @@ def parse_response(text):
     justification = data.pop("justification", "")
     notes = data.pop("notes", "")
 
+    base = DEFAULT_POLICY_AGE_TARGETED if age_targeting else DEFAULT_POLICY
+
     if data.get("do_nothing", False):
-        return dict(DEFAULT_POLICY), str(justification), str(notes)
+        return dict(base), str(justification), str(notes)
 
     data.pop("do_nothing", None)
 
-    policy = dict(DEFAULT_POLICY)
-    for key in DEFAULT_POLICY:
+    policy = dict(base)
+    for key in base:
         if key in data:
             policy[key] = data[key]
 
-    policy = validate_policy(policy)
+    policy = validate_policy(policy, age_targeting=age_targeting)
 
     return policy, str(justification), str(notes)
