@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-from outbreakbench.io import load_runs
+from outbreakbench.io import load_runs, sanitize_model_name
 from outbreakbench.metrics import npi_active, npi_stringency, npi_vector
 
 
@@ -276,8 +276,8 @@ def main():
         print_summary(model_analyses)
 
         fig = plot_taxonomy(model_analyses, model_name)
-        os.makedirs("outputs", exist_ok=True)
-        path = f"outputs/{model_name}_decision_patterns.png"
+        os.makedirs("outputs/llm_decisions", exist_ok=True)
+        path = f"outputs/llm_decisions/{sanitize_model_name(model_name)}.png"
         fig.savefig(path, dpi=150)
         plt.close(fig)
         print(f"\n  Saved {path}")

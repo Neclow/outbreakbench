@@ -12,12 +12,13 @@ validate-scenarios = "python scripts/validate/scenarios.py"
 validate-surveillance = "python scripts/validate/surveillance.py"
 # Running
 smoke = "python scripts/run/benchmark.py --model nemotron-3-nano:30b --model qwen3:14b --smoke-test"
-benchmark = "python scripts/run/benchmark.py --skip-existing"
+benchmark = "python scripts/run/benchmark.py"
 baselines = "python scripts/run/baselines.py"
 sweep = "bash scripts/run/sweep.sh"
 # Analysis
-analyze = "python scripts/analyze/llm_decisions.py"
-report = "python scripts/analyze/scenario_report.py"
+analyze = { depends-on = ["analyze-decisions", "analyze-scenarios"] }
+analyze-decisions = "python scripts/analyze/llm_decisions.py"
+analyze-scenarios = "python scripts/analyze/scenario_report.py"
 
 [dependencies]
 python = ">=3.13,<3.14"
