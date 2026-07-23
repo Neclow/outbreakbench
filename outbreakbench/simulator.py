@@ -194,5 +194,10 @@ def run_benchmark(
             "peak_severe": int(max(r["n_severe"])),
             "peak_critical": int(max(r["n_critical"])),
         },
+        "time_series": {
+            "n_infectious": [int(x) for x in r["n_infectious"]],
+            "cum_deaths": [int(x) for x in r["cum_deaths"]],
+            "n_quarantined": [int(x) for x in r["n_quarantined"]],
+        },
         "elapsed": elapsed,
     }
