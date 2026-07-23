@@ -35,6 +35,7 @@ import sys
 import time
 import traceback
 
+from outbreakbench.io import sanitize_model_name
 from outbreakbench.llm import make_client, smoke_test
 from outbreakbench.simulator import run_benchmark
 from outbreakbench.scenarios import SCENARIOS
@@ -105,10 +106,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def _sanitize(model):
-    return model.replace("/", "--").replace(":", "-")
-
-
 def run_name(model, scenario, framing, seed):
     return f"{scenario}_{framing}_seed{seed}"
 
@@ -129,7 +126,7 @@ def main():
             for model, scenario, framing, seed in runs
             if not os.path.exists(
                 os.path.join(
-                    args.output, _sanitize(model),
+                    args.output, sanitize_model_name(model),
                     f"{run_name(model, scenario, framing, seed)}.json",
                 )
             )
@@ -180,9 +177,9 @@ def main():
     if args.dry_run:
         for model, scenario, framing, seed in runs:
             name = run_name(model, scenario, framing, seed)
-            out = os.path.join(args.output, _sanitize(model), f"{name}.json")
+            out = os.path.join(args.output, sanitize_model_name(model), f"{name}.json")
             exists = " [EXISTS]" if os.path.exists(out) else ""
-            print(f"  {_sanitize(model)}/{name}{exists}")
+            print(f"  {sanitize_model_name(model)}/{name}{exists}")
         return
 
     completed = 0
@@ -191,7 +188,7 @@ def main():
 
     for i, (model, scenario, framing, seed) in enumerate(runs):
         name = run_name(model, scenario, framing, seed)
-        out_dir = os.path.join(args.output, _sanitize(model))
+        out_dir = os.path.join(args.output, sanitize_model_name(model))
         out_path = os.path.join(out_dir, f"{name}.json")
 
         print(

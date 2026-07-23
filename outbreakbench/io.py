@@ -6,6 +6,11 @@ import json
 import os
 
 
+def sanitize_model_name(model):
+    """Sanitize a model name for use in file/directory names."""
+    return model.replace("/", "--").replace(":", "-")
+
+
 def load_runs(output_dir="outputs/runs", model_filter=None):
     """Load benchmark run results from output directory.
 
